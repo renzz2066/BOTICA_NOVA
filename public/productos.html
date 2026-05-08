@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Productos - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html" class="activo">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Productos</h1>
+          <p>Gestión de medicamentos y productos farmacéuticos</p>
+        </div>
+
+        <button class="btn" id="btnNuevo">
+          <i class="fa-solid fa-plus"></i>
+          Nuevo producto
+        </button>
+      </header>
+
+      <section class="panel">
+
+        <div class="buscador">
+          <input type="text" id="inputBuscar" placeholder="Buscar producto por nombre, código, categoría o marca...">
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Código</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Marca</th>
+                <th>Presentación</th>
+                <th>Proveedor</th>
+                <th>Precio venta</th>
+                <th>Stock mínimo</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaProductos">
+              <tr>
+                <td colspan="10">Cargando productos...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+  <div class="modal" id="modalProducto">
+    <div class="modal-contenido">
+
+      <div class="modal-header">
+        <h2 id="tituloModal">Nuevo producto</h2>
+        <button class="btn-cerrar" id="btnCerrar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formProducto">
+
+        <input type="hidden" id="idProducto">
+
+        <div class="form-grid">
+
+          <div class="campo">
+            <label>Código</label>
+            <input type="text" id="codigo">
+          </div>
+
+          <div class="campo">
+            <label>Código de barras</label>
+            <input type="text" id="codigoBarras">
+          </div>
+
+          <div class="campo campo-completo">
+            <label>Nombre del producto</label>
+            <input type="text" id="nombre" required>
+          </div>
+
+          <div class="campo campo-completo">
+            <label>Descripción</label>
+            <input type="text" id="descripcion">
+          </div>
+
+          <div class="campo">
+            <label>Precio venta</label>
+            <input type="number" id="precioVenta" min="0" step="0.01" required>
+          </div>
+
+          <div class="campo">
+            <label>Precio compra</label>
+            <input type="number" id="precioCompra" min="0" step="0.01">
+          </div>
+
+          <div class="campo">
+            <label>Categoría</label>
+            <select id="idCategoria" required>
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Marca</label>
+            <select id="idMarca" required>
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Presentación</label>
+            <select id="idPresentacion" required>
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Proveedor</label>
+            <select id="idProveedor">
+              <option value="">Sin proveedor</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Unidad de medida</label>
+            <input type="text" id="unidadMedida" placeholder="UND, caja, frasco...">
+          </div>
+
+          <div class="campo">
+            <label>Stock mínimo</label>
+            <input type="number" id="stockMinimo" min="0" step="1" value="0">
+          </div>
+
+          <div class="campo">
+            <label>Requiere receta</label>
+            <select id="requiereReceta">
+              <option value="N">No</option>
+              <option value="S">Sí</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Es controlado</label>
+            <select id="esControlado">
+              <option value="N">No</option>
+              <option value="S">Sí</option>
+            </select>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn secundario" id="btnCancelar">
+            Cancelar
+          </button>
+
+          <button type="submit" class="btn">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Guardar
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+
+  <script src="js/productos.js"></script>
+</body>
+</html>
