@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html" class="activo">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Sistema de gestión para Botica Nova Salud</p>
+        </div>
+
+        <div class="usuario">
+          <i class="fa-solid fa-user"></i>
+          <span>Administrador</span>
+        </div>
+      </header>
+
+      <section class="tarjetas">
+
+        <div class="tarjeta">
+          <div class="icono azul">
+            <i class="fa-solid fa-boxes-stacked"></i>
+          </div>
+          <div>
+            <h3>Productos</h3>
+            <p>Gestión de medicamentos y productos</p>
+          </div>
+        </div>
+
+        <div class="tarjeta">
+          <div class="icono verde">
+            <i class="fa-solid fa-capsules"></i>
+          </div>
+          <div>
+            <h3>Lotes</h3>
+            <p>Control de stock y vencimientos</p>
+          </div>
+        </div>
+
+        <div class="tarjeta">
+          <div class="icono naranja">
+            <i class="fa-solid fa-cart-shopping"></i>
+          </div>
+          <div>
+            <h3>Ventas</h3>
+            <p>Registro de ventas diarias</p>
+          </div>
+        </div>
+
+        <div class="tarjeta">
+          <div class="icono rojo">
+            <i class="fa-solid fa-bell"></i>
+          </div>
+          <div>
+            <h3>Alertas</h3>
+            <p>Productos con bajo stock</p>
+          </div>
+        </div>
+
+      </section>
+
+      <section class="panel">
+        <h2>Accesos rápidos</h2>
+
+        <div class="acciones">
+          <a href="productos.html" class="btn">
+            <i class="fa-solid fa-plus"></i>
+            Nuevo producto
+          </a>
+
+          <a href="lotes.html" class="btn">
+            <i class="fa-solid fa-box"></i>
+            Registrar lote
+          </a>
+
+          <a href="ventas.html" class="btn">
+            <i class="fa-solid fa-cash-register"></i>
+            Nueva venta
+          </a>
+
+          <a href="chatbot.html" class="btn secundario">
+            <i class="fa-solid fa-robot"></i>
+            Abrir asistente
+          </a>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="js/dashboard.js"></script>
+</body>
+</html>
