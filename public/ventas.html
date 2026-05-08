@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ventas - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html" class="activo">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Ventas</h1>
+          <p>Registro de ventas y descuento automático de stock</p>
+        </div>
+      </header>
+
+      <section class="panel venta-panel">
+
+        <h2>Nueva venta</h2>
+
+        <div class="form-grid">
+
+          <div class="campo">
+            <label>Producto / Lote</label>
+            <select id="idLote">
+              <option value="">Seleccione producto...</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Cantidad</label>
+            <input type="number" id="cantidad" min="1" step="1" value="1">
+          </div>
+
+          <div class="campo">
+            <label>Precio unitario</label>
+            <input type="number" id="precioUnitario" min="0" step="0.01" readonly>
+          </div>
+
+          <div class="campo">
+            <label>Descuento</label>
+            <input type="number" id="descuento" min="0" step="0.01" value="0">
+          </div>
+
+        </div>
+
+        <div class="acciones venta-acciones">
+          <button class="btn" id="btnAgregar">
+            <i class="fa-solid fa-plus"></i>
+            Agregar producto
+          </button>
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Lote</th>
+                <th>Cantidad</th>
+                <th>Precio</th>
+                <th>Descuento</th>
+                <th>Subtotal</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaDetalleVenta">
+              <tr>
+                <td colspan="7">No hay productos agregados</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="total-venta">
+          <p>Subtotal: <strong id="subtotalTexto">S/ 0.00</strong></p>
+          <p>IGV: <strong id="igvTexto">S/ 0.00</strong></p>
+          <p>Total: <strong id="totalTexto">S/ 0.00</strong></p>
+        </div>
+
+        <div class="form-grid">
+          <div class="campo">
+            <label>Tipo comprobante</label>
+            <select id="tipoComprobante">
+              <option value="Boleta">Boleta</option>
+              <option value="Factura">Factura</option>
+              <option value="Ticket">Ticket</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Serie</label>
+            <input type="text" id="serie" value="B001">
+          </div>
+
+          <div class="campo">
+            <label>Número comprobante</label>
+            <input type="text" id="numeroComprobante">
+          </div>
+
+          <div class="campo">
+            <label>Observación</label>
+            <input type="text" id="observacion">
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn secundario" id="btnLimpiar">
+            Limpiar
+          </button>
+
+          <button class="btn" id="btnGuardarVenta">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Guardar venta
+          </button>
+        </div>
+
+      </section>
+
+      <section class="panel panel-separado">
+
+        <h2>Ventas registradas</h2>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Número venta</th>
+                <th>Fecha</th>
+                <th>Cliente</th>
+                <th>Usuario</th>
+                <th>Total</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaVentas">
+              <tr>
+                <td colspan="7">Cargando ventas...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="js/ventas.js"></script>
+</body>
+</html>

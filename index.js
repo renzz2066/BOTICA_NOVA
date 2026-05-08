@@ -848,6 +848,321 @@ app.get("/api/alertas", async (req, res) => {
 });
 
 /* =========================
+   LOTES DISPONIBLES PARA VENTA
+========================= */
+
+app.get("/api/lotes-disponibles", async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        l.IdLote,
+        l.NumeroLote,
+        l.StockActual,
+        l.FechaVencimiento,
+        i.IdItem,
+        i.Nombre AS Producto,
+        i.PrecioVenta,
+        m.Nombre AS Marca,
+        pr.Nombre AS Presentacion
+      FROM LT_Lote l
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      INNER JOIN MA_Marca m ON i.IdMarca = m.IdMarca
+      INNER JOIN PR_Presentacion pr ON i.IdPresentacion = pr.IdPresentacion
+      WHERE l.Estado = 'A'
+        AND i.Estado = 'A'
+        AND l.StockActual > 0
+      ORDER BY i.Nombre ASC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Error al listar lotes disponibles:", error);
+    res.status(500).json({ error: "Error al listar lotes disponibles" });
+  }
+});
+
+/* =========================
+   VENTAS
+========================= */
+
+async function obtenerDatosVentaBasicos(connection) {
+  let idCliente;
+  let idUsuario;
+  let idEstadoVenta;
+
+  const [clientes] = await connection.query(`
+    SELECT IdCliente
+    FROM CL_Cliente
+    WHERE CodigoCliente = 'CLI-GENERAL'
+    LIMIT 1
+  `);
+
+  if (clientes.length > 0) {
+    idCliente = clientes[0].IdCliente;
+  } else {
+    const [personaCliente] = await connection.query(`
+      INSERT INTO PE_Persona
+      (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+      VALUES ('Cliente', 'General', 'DNI', '00000000', '', '', '')
+    `);
+
+    const [cliente] = await connection.query(
+      `
+      INSERT INTO CL_Cliente
+      (IdPersona, CodigoCliente)
+      VALUES (?, 'CLI-GENERAL')
+      `,
+      [personaCliente.insertId]
+    );
+
+    idCliente = cliente.insertId;
+  }
+
+  const [usuarios] = await connection.query(`
+    SELECT IdUsuario
+    FROM US_Usuario
+    WHERE Username = 'admin'
+    LIMIT 1
+  `);
+
+  if (usuarios.length > 0) {
+    idUsuario = usuarios[0].IdUsuario;
+  } else {
+    const [personaUsuario] = await connection.query(`
+      INSERT INTO PE_Persona
+      (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+      VALUES ('Administrador', 'Sistema', 'DNI', '11111111', '', '', '')
+    `);
+
+    const [usuario] = await connection.query(
+      `
+      INSERT INTO US_Usuario
+      (IdPersona, Username, PasswordHash, Rol)
+      VALUES (?, 'admin', '123456', 'ADMIN')
+      `,
+      [personaUsuario.insertId]
+    );
+
+    idUsuario = usuario.insertId;
+  }
+
+  const [estados] = await connection.query(`
+    SELECT IdEstadoVenta
+    FROM EV_EstadoVenta
+    WHERE Codigo = 'REG'
+    LIMIT 1
+  `);
+
+  if (estados.length > 0) {
+    idEstadoVenta = estados[0].IdEstadoVenta;
+  } else {
+    const [estado] = await connection.query(`
+      INSERT INTO EV_EstadoVenta
+      (Codigo, Nombre)
+      VALUES ('REG', 'Registrada')
+    `);
+
+    idEstadoVenta = estado.insertId;
+  }
+
+  return { idCliente, idUsuario, idEstadoVenta };
+}
+
+app.get("/api/ventas", async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        v.IdVenta,
+        v.NumeroVenta,
+        v.FechaVenta,
+        v.Subtotal,
+        v.Igv,
+        v.Total,
+        v.TipoComprobante,
+        v.NumeroComprobante,
+        ev.Nombre AS EstadoVenta,
+        CONCAT(pc.Nombres, ' ', pc.Apellidos) AS Cliente,
+        u.Username AS Usuario
+      FROM VE_Venta v
+      INNER JOIN CL_Cliente c ON v.IdCliente = c.IdCliente
+      INNER JOIN PE_Persona pc ON c.IdPersona = pc.IdPersona
+      INNER JOIN US_Usuario u ON v.IdUsuario = u.IdUsuario
+      INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+      WHERE v.Estado = 'A'
+      ORDER BY v.IdVenta DESC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Error al listar ventas:", error);
+    res.status(500).json({ error: "Error al listar ventas" });
+  }
+});
+
+app.get("/api/ventas/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  try {
+    const [ventaRows] = await pool.query(
+      `
+      SELECT *
+      FROM VE_Venta
+      WHERE IdVenta = ?
+      `,
+      [id]
+    );
+
+    if (ventaRows.length === 0) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    const [detalles] = await pool.query(
+      `
+      SELECT 
+        dv.IdDetalleVenta,
+        dv.IdLote,
+        i.Nombre AS Producto,
+        l.NumeroLote,
+        dv.Cantidad,
+        dv.PrecioUnitario,
+        dv.Descuento,
+        dv.Subtotal
+      FROM DV_DetalleVenta dv
+      INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      WHERE dv.IdVenta = ?
+      `,
+      [id]
+    );
+
+    res.json({
+      venta: ventaRows[0],
+      detalles,
+    });
+  } catch (error) {
+    console.error("Error al obtener venta:", error);
+    res.status(500).json({ error: "Error al obtener venta" });
+  }
+});
+
+app.post("/api/ventas", async (req, res) => {
+  const { tipoComprobante, serie, numeroComprobante, observacion, detalles } = req.body;
+
+  if (!detalles || detalles.length === 0) {
+    return res.status(400).json({ error: "La venta debe tener al menos un producto" });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const { idCliente, idUsuario, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
+
+    let total = 0;
+
+    for (const detalle of detalles) {
+      const [lotes] = await connection.query(
+        `
+        SELECT StockActual
+        FROM LT_Lote
+        WHERE IdLote = ?
+        FOR UPDATE
+        `,
+        [detalle.idLote]
+      );
+
+      if (lotes.length === 0) {
+        throw new Error("Uno de los lotes no existe");
+      }
+
+      if (lotes[0].StockActual < detalle.cantidad) {
+        throw new Error("Stock insuficiente para uno de los productos");
+      }
+
+      const descuento = detalle.descuento || 0;
+      const subtotalDetalle = detalle.cantidad * detalle.precioUnitario - descuento;
+
+      total += subtotalDetalle;
+    }
+
+    const subtotal = total / 1.18;
+    const igv = total - subtotal;
+
+    const [ventaResult] = await connection.query(
+      `
+      INSERT INTO VE_Venta
+      (
+        NumeroVenta, IdCliente, IdUsuario, IdEstadoVenta,
+        Subtotal, Igv, Total, TipoComprobante, Serie,
+        NumeroComprobante, Moneda, Observacion
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PEN', ?)
+      `,
+      [
+        `V${Date.now().toString().slice(-9)}`,
+        idCliente,
+        idUsuario,
+        idEstadoVenta,
+        subtotal,
+        igv,
+        total,
+        tipoComprobante || "Boleta",
+        serie || "B001",
+        numeroComprobante || null,
+        observacion || "",
+      ]
+    );
+
+    const idVenta = ventaResult.insertId;
+
+    for (const detalle of detalles) {
+      const descuento = detalle.descuento || 0;
+      const subtotalDetalle = detalle.cantidad * detalle.precioUnitario - descuento;
+
+      await connection.query(
+        `
+        INSERT INTO DV_DetalleVenta
+        (IdVenta, IdLote, Cantidad, PrecioUnitario, Descuento, Subtotal)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [
+          idVenta,
+          detalle.idLote,
+          detalle.cantidad,
+          detalle.precioUnitario,
+          descuento,
+          subtotalDetalle,
+        ]
+      );
+
+      await connection.query(
+        `
+        UPDATE LT_Lote
+        SET StockActual = StockActual - ?
+        WHERE IdLote = ?
+        `,
+        [detalle.cantidad, detalle.idLote]
+      );
+    }
+
+    await connection.commit();
+
+    res.status(201).json({
+      mensaje: "Venta registrada correctamente",
+      idVenta,
+      total,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error al registrar venta:", error.message);
+    res.status(500).json({ error: error.message || "Error al registrar venta" });
+  } finally {
+    connection.release();
+  }
+});
+
+/* =========================
    CHATBOT SIMPLE
 ========================= */
 

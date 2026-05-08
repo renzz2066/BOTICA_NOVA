@@ -396,3 +396,36 @@ td {
     flex-direction: column;
   }
 }
+
+.venta-panel h2 {
+  margin-bottom: 20px;
+}
+
+.venta-acciones {
+  margin: 20px 0;
+}
+
+.total-venta {
+  display: flex;
+  justify-content: flex-end;
+  gap: 25px;
+  margin: 20px 0;
+  font-size: 16px;
+}
+
+.total-venta p {
+  background: #f3f4f6;
+  padding: 12px 15px;
+  border-radius: 10px;
+}
+
+.panel-separado {
+  margin-top: 25px;
+}
+
+@media (max-width: 700px) {
+  .total-venta {
+    flex-direction: column;
+    gap: 10px;
+  }
+}
