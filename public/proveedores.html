@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proveedores - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html" class="activo">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Proveedores</h1>
+          <p>Registro y gestión de proveedores de la botica</p>
+        </div>
+
+        <button class="btn" id="btnNuevo">
+          <i class="fa-solid fa-plus"></i>
+          Nuevo proveedor
+        </button>
+      </header>
+
+      <section class="panel">
+
+        <div class="buscador">
+          <input type="text" id="inputBuscar" placeholder="Buscar proveedor por razón social, RUC o teléfono...">
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Razón social</th>
+                <th>RUC</th>
+                <th>Contacto</th>
+                <th>Teléfono</th>
+                <th>Correo</th>
+                <th>Dirección</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaProveedores">
+              <tr>
+                <td colspan="8">Cargando proveedores...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+  <div class="modal" id="modalProveedor">
+    <div class="modal-contenido">
+
+      <div class="modal-header">
+        <h2 id="tituloModal">Nuevo proveedor</h2>
+        <button class="btn-cerrar" id="btnCerrar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formProveedor">
+
+        <input type="hidden" id="idProveedor">
+        <input type="hidden" id="idPersona">
+
+        <div class="form-grid">
+
+          <div class="campo">
+            <label>Nombres</label>
+            <input type="text" id="nombres" required>
+          </div>
+
+          <div class="campo">
+            <label>Apellidos</label>
+            <input type="text" id="apellidos" required>
+          </div>
+
+          <div class="campo">
+            <label>Tipo documento</label>
+            <select id="tipoDocumento">
+              <option value="DNI">DNI</option>
+              <option value="CE">Carnet extranjería</option>
+              <option value="RUC">RUC</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Número documento</label>
+            <input type="text" id="numeroDocumento">
+          </div>
+
+          <div class="campo">
+            <label>Razón social</label>
+            <input type="text" id="razonSocial" required>
+          </div>
+
+          <div class="campo">
+            <label>RUC</label>
+            <input type="text" id="ruc" required>
+          </div>
+
+          <div class="campo">
+            <label>Teléfono</label>
+            <input type="text" id="telefono">
+          </div>
+
+          <div class="campo">
+            <label>Correo</label>
+            <input type="email" id="correo">
+          </div>
+
+          <div class="campo campo-completo">
+            <label>Dirección</label>
+            <input type="text" id="direccion">
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn secundario" id="btnCancelar">
+            Cancelar
+          </button>
+
+          <button type="submit" class="btn">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Guardar
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+
+  <script src="js/proveedores.js"></script>
+</body>
+</html>
