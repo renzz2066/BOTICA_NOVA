@@ -486,7 +486,7 @@ app.post("/api/productos", async (req, res) => {
         esControlado || "N",
         unidadMedida,
         stockMinimo || 0,
-        usuarioRegistro,
+        usuarioRegistro || "admin",
       ]
     );
 
@@ -497,6 +497,135 @@ app.post("/api/productos", async (req, res) => {
   } catch (error) {
     console.error("Error al registrar producto:", error);
     res.status(500).json({ error: "Error al registrar producto" });
+  }
+});
+
+app.get("/api/productos/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT *
+      FROM IT_Item
+      WHERE IdItem = ?
+      `,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    res.json(rows[0]);
+  } catch (error) {
+    console.error("Error al obtener producto:", error);
+    res.status(500).json({ error: "Error al obtener producto" });
+  }
+});
+
+app.put("/api/productos/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  const {
+    codigo,
+    codigoBarras,
+    nombre,
+    descripcion,
+    precioVenta,
+    precioCompra,
+    idCategoria,
+    idMarca,
+    idPresentacion,
+    idProveedor,
+    requiereReceta,
+    esControlado,
+    unidadMedida,
+    stockMinimo,
+    usuarioModifica,
+  } = req.body;
+
+  if (!nombre || !precioVenta || !idCategoria || !idMarca || !idPresentacion) {
+    return res.status(400).json({
+      error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
+    });
+  }
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE IT_Item
+      SET
+        Codigo = ?,
+        CodigoBarras = ?,
+        Nombre = ?,
+        Descripcion = ?,
+        PrecioVenta = ?,
+        PrecioCompra = ?,
+        IdCategoria = ?,
+        IdMarca = ?,
+        IdPresentacion = ?,
+        IdProveedor = ?,
+        RequiereReceta = ?,
+        EsControlado = ?,
+        UnidadMedida = ?,
+        StockMinimo = ?,
+        UsuarioModifica = ?,
+        FechaModifica = NOW()
+      WHERE IdItem = ?
+      `,
+      [
+        codigo,
+        codigoBarras,
+        nombre,
+        descripcion,
+        precioVenta,
+        precioCompra,
+        idCategoria,
+        idMarca,
+        idPresentacion,
+        idProveedor || null,
+        requiereReceta || "N",
+        esControlado || "N",
+        unidadMedida,
+        stockMinimo || 0,
+        usuarioModifica || "admin",
+        id,
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    res.json({ mensaje: "Producto actualizado correctamente" });
+  } catch (error) {
+    console.error("Error al actualizar producto:", error);
+    res.status(500).json({ error: "Error al actualizar producto" });
+  }
+});
+
+app.delete("/api/productos/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE IT_Item
+      SET Estado = 'I'
+      WHERE IdItem = ?
+      `,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    res.json({ mensaje: "Producto eliminado correctamente" });
+  } catch (error) {
+    console.error("Error al eliminar producto:", error);
+    res.status(500).json({ error: "Error al eliminar producto" });
   }
 });
 
@@ -564,7 +693,7 @@ app.post("/api/lotes", async (req, res) => {
         fechaIngreso,
         costoCompraLote,
         stockActual,
-        usuarioRegistro,
+        usuarioRegistro || "admin",
       ]
     );
 
