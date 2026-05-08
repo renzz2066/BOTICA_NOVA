@@ -707,6 +707,116 @@ app.post("/api/lotes", async (req, res) => {
   }
 });
 
+app.get("/api/lotes/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT *
+      FROM LT_Lote
+      WHERE IdLote = ?
+      `,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Lote no encontrado" });
+    }
+
+    res.json(rows[0]);
+  } catch (error) {
+    console.error("Error al obtener lote:", error);
+    res.status(500).json({ error: "Error al obtener lote" });
+  }
+});
+
+app.put("/api/lotes/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  const {
+    idItem,
+    numeroLote,
+    fechaVencimiento,
+    fechaIngreso,
+    costoCompraLote,
+    stockActual,
+    usuarioRegistro,
+  } = req.body;
+
+  if (!idItem || !numeroLote || stockActual === undefined) {
+    return res.status(400).json({
+      error: "Producto, número de lote y stock actual son obligatorios",
+    });
+  }
+
+  if (parseInt(stockActual) < 0) {
+    return res.status(400).json({
+      error: "El stock actual no puede ser negativo",
+    });
+  }
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE LT_Lote
+      SET
+        IdItem = ?,
+        NumeroLote = ?,
+        FechaVencimiento = ?,
+        FechaIngreso = ?,
+        CostoCompraLote = ?,
+        StockActual = ?,
+        UsuarioRegistro = ?
+      WHERE IdLote = ?
+      `,
+      [
+        idItem,
+        numeroLote,
+        fechaVencimiento || null,
+        fechaIngreso || null,
+        costoCompraLote || null,
+        stockActual,
+        usuarioRegistro || "admin",
+        id,
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Lote no encontrado" });
+    }
+
+    res.json({ mensaje: "Lote actualizado correctamente" });
+  } catch (error) {
+    console.error("Error al actualizar lote:", error);
+    res.status(500).json({ error: "Error al actualizar lote" });
+  }
+});
+
+app.delete("/api/lotes/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE LT_Lote
+      SET Estado = 'I'
+      WHERE IdLote = ?
+      `,
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Lote no encontrado" });
+    }
+
+    res.json({ mensaje: "Lote eliminado correctamente" });
+  } catch (error) {
+    console.error("Error al eliminar lote:", error);
+    res.status(500).json({ error: "Error al eliminar lote" });
+  }
+});
+
 /* =========================
    ALERTAS
 ========================= */

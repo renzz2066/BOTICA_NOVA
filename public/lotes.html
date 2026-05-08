@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lotes - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html" class="activo">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Lotes</h1>
+          <p>Registro de ingreso de productos, stock y vencimientos</p>
+        </div>
+
+        <button class="btn" id="btnNuevo">
+          <i class="fa-solid fa-plus"></i>
+          Nuevo lote
+        </button>
+      </header>
+
+      <section class="panel">
+
+        <div class="buscador">
+          <input type="text" id="inputBuscar" placeholder="Buscar por producto, número de lote o stock...">
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Producto</th>
+                <th>Número lote</th>
+                <th>Fecha ingreso</th>
+                <th>Fecha vencimiento</th>
+                <th>Costo compra</th>
+                <th>Stock actual</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaLotes">
+              <tr>
+                <td colspan="8">Cargando lotes...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+  <div class="modal" id="modalLote">
+    <div class="modal-contenido">
+
+      <div class="modal-header">
+        <h2 id="tituloModal">Nuevo lote</h2>
+        <button class="btn-cerrar" id="btnCerrar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formLote">
+
+        <input type="hidden" id="idLote">
+
+        <div class="form-grid">
+
+          <div class="campo campo-completo">
+            <label>Producto</label>
+            <select id="idItem" required>
+              <option value="">Seleccione producto...</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Número de lote</label>
+            <input type="text" id="numeroLote" required>
+          </div>
+
+          <div class="campo">
+            <label>Stock actual</label>
+            <input type="number" id="stockActual" min="0" step="1" required>
+          </div>
+
+          <div class="campo">
+            <label>Fecha de ingreso</label>
+            <input type="date" id="fechaIngreso">
+          </div>
+
+          <div class="campo">
+            <label>Fecha de vencimiento</label>
+            <input type="date" id="fechaVencimiento">
+          </div>
+
+          <div class="campo">
+            <label>Costo compra lote</label>
+            <input type="number" id="costoCompraLote" min="0" step="0.01">
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn secundario" id="btnCancelar">
+            Cancelar
+          </button>
+
+          <button type="submit" class="btn">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Guardar
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+
+  <script src="js/lotes.js"></script>
+</body>
+</html>
