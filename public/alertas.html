@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alertas - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html" class="activo">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Alertas de stock</h1>
+          <p>Productos que están por debajo o igual al stock mínimo</p>
+        </div>
+
+        <button class="btn" id="btnActualizar">
+          <i class="fa-solid fa-rotate"></i>
+          Actualizar
+        </button>
+      </header>
+
+      <section class="tarjetas">
+        <div class="tarjeta">
+          <div class="icono rojo">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+          </div>
+          <div>
+            <h3 id="totalAlertas">0</h3>
+            <p>Alertas activas</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+
+        <div class="buscador">
+          <input type="text" id="inputBuscar" placeholder="Buscar por producto, lote o proveedor...">
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Lote</th>
+                <th>Stock actual</th>
+                <th>Stock mínimo</th>
+                <th>Proveedor</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaAlertas">
+              <tr>
+                <td colspan="6">Cargando alertas...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="js/alertas.js"></script>
+</body>
+</html>
