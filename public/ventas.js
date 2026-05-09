@@ -169,7 +169,7 @@ function agregarProducto() {
 
   mostrarDetalleVenta();
   limpiarCamposProducto();
-}
+};
 
 function mostrarDetalleVenta() {
   if (detalleVenta.length === 0) {

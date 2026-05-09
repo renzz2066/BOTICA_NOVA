@@ -295,6 +295,17 @@ app.post("/api/proveedores", async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("Error al registrar proveedor:", error);
+
+    if (error.code === "ER_DUP_ENTRY") {
+      if (error.sqlMessage?.includes("NumeroDocumento")) {
+        return res.status(409).json({ error: "Ya existe una persona con ese numero de documento" });
+      }
+
+      if (error.sqlMessage?.includes("Ruc")) {
+        return res.status(409).json({ error: "Ya existe un proveedor con ese RUC" });
+      }
+    }
+
     res.status(500).json({ error: "Error al registrar proveedor" });
   } finally {
     connection.release();
