@@ -1,16 +1,346 @@
 const express = require("express");
 const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 const pool = require("./db");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const PUBLIC_DIR = path.join(__dirname, "public");
+const SESSION_COOKIE = "botica_sesion";
+const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+const sessions = new Map();
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+
+function normalizarRol(rol) {
+  const rolNormalizado = String(rol || "").trim().toUpperCase();
+
+  if (rolNormalizado === "ADMINISTRADOR") {
+    return "ADMIN";
+  }
+
+  if (rolNormalizado === "VENTAS") {
+    return "CAJERO";
+  }
+
+  return rolNormalizado || "CAJERO";
+}
+
+function parseCookies(cookieHeader = "") {
+  return cookieHeader.split(";").reduce((cookies, cookie) => {
+    const [nombre, ...valorPartes] = cookie.trim().split("=");
+
+    if (!nombre) {
+      return cookies;
+    }
+
+    cookies[nombre] = decodeURIComponent(valorPartes.join("="));
+    return cookies;
+  }, {});
+}
+
+function crearCookieSesion(token) {
+  const maxAge = Math.floor(SESSION_DURATION_MS / 1000);
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+}
+
+function limpiarCookieSesion() {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+}
+
+function obtenerTokenSesion(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  return cookies[SESSION_COOKIE];
+}
+
+function cargarSesion(req, res, next) {
+  const token = obtenerTokenSesion(req);
+  const sesion = token ? sessions.get(token) : null;
+
+  if (!sesion) {
+    req.usuario = null;
+    return next();
+  }
+
+  if (sesion.expiraEn < Date.now()) {
+    sessions.delete(token);
+    res.setHeader("Set-Cookie", limpiarCookieSesion());
+    req.usuario = null;
+    return next();
+  }
+
+  sesion.expiraEn = Date.now() + SESSION_DURATION_MS;
+  req.usuario = sesion.usuario;
+  next();
+}
+
+function crearSesion(usuario) {
+  const token = crypto.randomBytes(32).toString("hex");
+
+  sessions.set(token, {
+    usuario,
+    expiraEn: Date.now() + SESSION_DURATION_MS,
+  });
+
+  return token;
+}
+
+function requireAuth(req, res, next) {
+  if (!req.usuario) {
+    return res.status(401).json({ error: "Debe iniciar sesion" });
+  }
+
+  next();
+}
+
+function requireRole(...rolesPermitidos) {
+  return (req, res, next) => {
+    if (!req.usuario) {
+      return res.status(401).json({ error: "Debe iniciar sesion" });
+    }
+
+    if (!rolesPermitidos.includes(req.usuario.rol)) {
+      return res.status(403).json({ error: "No tiene permisos para esta accion" });
+    }
+
+    next();
+  };
+}
+
+function requirePageRole(...rolesPermitidos) {
+  return (req, res, next) => {
+    if (!req.usuario) {
+      return res.redirect("/login.html");
+    }
+
+    if (!rolesPermitidos.includes(req.usuario.rol)) {
+      return res.redirect("/dashboard.html?sinPermiso=1");
+    }
+
+    next();
+  };
+}
+
+function requireApiRole(req, res, next) {
+  const ruta = req.path;
+
+  if (
+    ruta.startsWith("/ventas") ||
+    ruta.startsWith("/lotes-disponibles") ||
+    ruta.startsWith("/alertas") ||
+    ruta.startsWith("/chatbot")
+  ) {
+    return requireRole("ADMIN", "CAJERO")(req, res, next);
+  }
+
+  return requireRole("ADMIN")(req, res, next);
+}
+
+async function crearPasswordHash(password) {
+  return bcrypt.hash(password, 10);
+}
+
+async function verificarPassword(password, passwordHash) {
+  if (!password || !passwordHash) {
+    return false;
+  }
+
+  if (passwordHash.startsWith("$2a$") || passwordHash.startsWith("$2b$") || passwordHash.startsWith("$2y$")) {
+    return bcrypt.compare(password, passwordHash);
+  }
+
+  return password === passwordHash;
+}
+
+async function asegurarUsuarioInicial(username, password, rol, nombres, apellidos, numeroDocumento) {
+  const [usuarios] = await pool.query(
+    `
+    SELECT IdUsuario
+    FROM US_Usuario
+    WHERE Username = ?
+    LIMIT 1
+    `,
+    [username]
+  );
+
+  if (usuarios.length > 0) {
+    return;
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [personas] = await connection.query(
+      `
+      SELECT IdPersona
+      FROM PE_Persona
+      WHERE NumeroDocumento = ?
+      LIMIT 1
+      `,
+      [numeroDocumento]
+    );
+
+    let idPersona;
+
+    if (personas.length > 0) {
+      idPersona = personas[0].IdPersona;
+    } else {
+      const [persona] = await connection.query(
+        `
+        INSERT INTO PE_Persona
+        (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+        VALUES (?, ?, 'DNI', ?, '', '', '')
+        `,
+        [nombres, apellidos, numeroDocumento]
+      );
+
+      idPersona = persona.insertId;
+    }
+
+    const passwordHash = await crearPasswordHash(password);
+
+    await connection.query(
+      `
+      INSERT INTO US_Usuario
+      (IdPersona, Username, PasswordHash, Rol)
+      VALUES (?, ?, ?, ?)
+      `,
+      [idPersona, username, passwordHash, rol]
+    );
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function asegurarUsuariosIniciales() {
+  await asegurarUsuarioInicial("admin", "123456", "ADMIN", "Administrador", "Sistema", "11111111");
+  await asegurarUsuarioInicial("cajero", "123456", "CAJERO", "Cajero", "Ventas", "22222222");
+}
+
+app.use(cargarSesion);
 
 app.get("/", (req, res) => {
-  res.send("API de Botica Nova funcionando correctamente");
+  res.redirect(req.usuario ? "/dashboard.html" : "/login.html");
 });
+
+app.get("/index.html", (req, res) => {
+  res.redirect(req.usuario ? "/dashboard.html" : "/login.html");
+});
+
+app.get("/login.html", (req, res) => {
+  if (req.usuario) {
+    return res.redirect("/dashboard.html");
+  }
+
+  res.sendFile(path.join(PUBLIC_DIR, "login.html"));
+});
+
+const paginasProtegidas = [
+  { ruta: "/dashboard.html", archivo: "dashboard.html", roles: ["ADMIN", "CAJERO"] },
+  { ruta: "/proveedores.html", archivo: "proveedores.html", roles: ["ADMIN"] },
+  { ruta: "/productos.html", archivo: "productos.html", roles: ["ADMIN"] },
+  { ruta: "/lotes.html", archivo: "lotes.html", roles: ["ADMIN"] },
+  { ruta: "/ventas.html", archivo: "ventas.html", roles: ["ADMIN", "CAJERO"] },
+  { ruta: "/alertas.html", archivo: "alertas.html", roles: ["ADMIN", "CAJERO"] },
+  { ruta: "/chatbot.html", archivo: "chatbot.html", roles: ["ADMIN", "CAJERO"] },
+];
+
+paginasProtegidas.forEach((pagina) => {
+  app.get(pagina.ruta, requirePageRole(...pagina.roles), (req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, pagina.archivo));
+  });
+});
+
+app.use(express.static(PUBLIC_DIR));
+
+app.post("/api/auth/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: "Usuario y contrasena son obligatorios" });
+  }
+
+  try {
+    const [usuarios] = await pool.query(
+      `
+      SELECT IdUsuario, Username, PasswordHash, Rol
+      FROM US_Usuario
+      WHERE Username = ?
+      LIMIT 1
+      `,
+      [username]
+    );
+
+    if (usuarios.length === 0) {
+      return res.status(401).json({ error: "Usuario o contrasena incorrectos" });
+    }
+
+    const usuarioDb = usuarios[0];
+    const passwordValido = await verificarPassword(password, usuarioDb.PasswordHash);
+
+    if (!passwordValido) {
+      return res.status(401).json({ error: "Usuario o contrasena incorrectos" });
+    }
+
+    if (!usuarioDb.PasswordHash.startsWith("$2")) {
+      const nuevoHash = await crearPasswordHash(password);
+      await pool.query(
+        `
+        UPDATE US_Usuario
+        SET PasswordHash = ?
+        WHERE IdUsuario = ?
+        `,
+        [nuevoHash, usuarioDb.IdUsuario]
+      );
+    }
+
+    const usuario = {
+      idUsuario: usuarioDb.IdUsuario,
+      username: usuarioDb.Username,
+      rol: normalizarRol(usuarioDb.Rol),
+    };
+
+    const token = crearSesion(usuario);
+    res.setHeader("Set-Cookie", crearCookieSesion(token));
+
+    res.json({
+      mensaje: "Inicio de sesion correcto",
+      usuario,
+    });
+  } catch (error) {
+    console.error("Error al iniciar sesion:", error);
+    res.status(500).json({ error: "Error al iniciar sesion" });
+  }
+});
+
+app.get("/api/auth/me", (req, res) => {
+  if (!req.usuario) {
+    return res.status(401).json({ error: "Debe iniciar sesion" });
+  }
+
+  res.json({ usuario: req.usuario });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const token = obtenerTokenSesion(req);
+
+  if (token) {
+    sessions.delete(token);
+  }
+
+  res.setHeader("Set-Cookie", limpiarCookieSesion());
+  res.json({ mensaje: "Sesion cerrada correctamente" });
+});
+
+app.use("/api", requireAuth, requireApiRole);
 
 app.get("/api/test-db", async (req, res) => {
   try {
@@ -898,7 +1228,6 @@ app.get("/api/lotes-disponibles", async (req, res) => {
 
 async function obtenerDatosVentaBasicos(connection) {
   let idCliente;
-  let idUsuario;
   let idEstadoVenta;
 
   const [clientes] = await connection.query(`
@@ -929,34 +1258,6 @@ async function obtenerDatosVentaBasicos(connection) {
     idCliente = cliente.insertId;
   }
 
-  const [usuarios] = await connection.query(`
-    SELECT IdUsuario
-    FROM US_Usuario
-    WHERE Username = 'admin'
-    LIMIT 1
-  `);
-
-  if (usuarios.length > 0) {
-    idUsuario = usuarios[0].IdUsuario;
-  } else {
-    const [personaUsuario] = await connection.query(`
-      INSERT INTO PE_Persona
-      (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
-      VALUES ('Administrador', 'Sistema', 'DNI', '11111111', '', '', '')
-    `);
-
-    const [usuario] = await connection.query(
-      `
-      INSERT INTO US_Usuario
-      (IdPersona, Username, PasswordHash, Rol)
-      VALUES (?, 'admin', '123456', 'ADMIN')
-      `,
-      [personaUsuario.insertId]
-    );
-
-    idUsuario = usuario.insertId;
-  }
-
   const [estados] = await connection.query(`
     SELECT IdEstadoVenta
     FROM EV_EstadoVenta
@@ -976,7 +1277,7 @@ async function obtenerDatosVentaBasicos(connection) {
     idEstadoVenta = estado.insertId;
   }
 
-  return { idCliente, idUsuario, idEstadoVenta };
+  return { idCliente, idEstadoVenta };
 }
 
 app.get("/api/ventas", async (req, res) => {
@@ -1068,7 +1369,8 @@ app.post("/api/ventas", async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { idCliente, idUsuario, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
+    const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
+    const idUsuario = req.usuario.idUsuario;
 
     let total = 0;
 
@@ -1238,6 +1540,13 @@ app.post("/api/chatbot", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
-});
+asegurarUsuariosIniciales()
+  .catch((error) => {
+    console.error("No se pudieron asegurar los usuarios iniciales:", error.message);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`Servidor corriendo en http://localhost:${PORT}`);
+      console.log("Usuarios iniciales: admin/123456 y cajero/123456");
+    });
+  });
