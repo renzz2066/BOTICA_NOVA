@@ -162,10 +162,10 @@ function mostrarKardex(lista) {
           <td>${movimiento.NumeroLote}</td>
           <td>${crearBadgeMovimiento(movimiento.CodigoMovimiento, movimiento.TipoMovimiento)}</td>
           <td>${movimiento.NumeroDocumento || "-"}</td>
-          <td>${movimiento.CantidadEntrada}</td>
-          <td>${movimiento.CantidadSalida}</td>
-          <td>${movimiento.StockAnterior}</td>
-          <td>${movimiento.StockNuevo}</td>
+          <td>${formatearCantidadMinima(movimiento.CantidadEntrada, movimiento.UnidadMinima)}</td>
+          <td>${formatearCantidadMinima(movimiento.CantidadSalida, movimiento.UnidadMinima)}</td>
+          <td>${formatearCantidadMinima(movimiento.StockAnterior, movimiento.UnidadMinima)}</td>
+          <td>${formatearCantidadMinima(movimiento.StockNuevo, movimiento.UnidadMinima)}</td>
           <td>${movimiento.Usuario || "-"}</td>
         </tr>
       `;
@@ -185,6 +185,10 @@ function actualizarResumen(lista) {
 function crearBadgeMovimiento(codigo, texto) {
   const clase = String(codigo || "").toLowerCase();
   return `<span class="badge-movimiento ${clase}">${texto || codigo || "-"}</span>`;
+}
+
+function formatearCantidadMinima(cantidad, unidadMinima) {
+  return `${Number(cantidad || 0)} ${unidadMinima || "UND"}`;
 }
 
 function formatearFecha(fecha) {

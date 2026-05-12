@@ -63,8 +63,8 @@ function mostrarAlertas(lista) {
         <tr>
           <td>${alerta.Producto}</td>
           <td>${alerta.NumeroLote}</td>
-          <td>${alerta.StockActual}</td>
-          <td>${alerta.StockMinimo}</td>
+          <td>${alerta.StockActual} ${alerta.UnidadMinima || "UND"}</td>
+          <td>${alerta.StockMinimo} ${alerta.UnidadMinima || "UND"}</td>
           <td>${alerta.Proveedor || "-"}</td>
           <td>
             <span class="badge-alerta">

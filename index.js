@@ -353,7 +353,336 @@ async function asegurarCatalogosInventario() {
   }
 }
 
+async function columnaExiste(connection, tabla, columna) {
+  const [rows] = await connection.query(
+    `
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND COLUMN_NAME = ?
+    LIMIT 1
+    `,
+    [tabla, columna]
+  );
+
+  return rows.length > 0;
+}
+
+async function constraintExiste(connection, tabla, constraint) {
+  const [rows] = await connection.query(
+    `
+    SELECT CONSTRAINT_NAME
+    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND CONSTRAINT_NAME = ?
+    LIMIT 1
+    `,
+    [tabla, constraint]
+  );
+
+  return rows.length > 0;
+}
+
+async function agregarColumnaSiNoExiste(connection, tabla, columna, definicion) {
+  if (await columnaExiste(connection, tabla, columna)) {
+    return;
+  }
+
+  await connection.query(`ALTER TABLE ${tabla} ADD COLUMN ${definicion}`);
+}
+
+async function asegurarEsquemaUnidadesVenta() {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS UV_UnidadVenta (
+        IdUnidadVenta Int AUTO_INCREMENT PRIMARY KEY,
+        IdItem Int NOT NULL,
+        Nombre Varchar(50) NOT NULL,
+        Abreviatura Varchar(20) NOT NULL,
+        FactorConversion Int NOT NULL,
+        PrecioVenta Decimal(12,2),
+        EsUnidadMinima Char(1) DEFAULT 'N',
+        Estado Char(1) DEFAULT 'A',
+        FechaRegistro Datetime DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (IdItem, Abreviatura),
+        FOREIGN KEY (IdItem) REFERENCES IT_Item(IdItem),
+        CHECK (FactorConversion > 0)
+      ) ENGINE = InnoDB
+    `);
+
+    await agregarColumnaSiNoExiste(
+      connection,
+      "DV_DetalleVenta",
+      "IdUnidadVenta",
+      "IdUnidadVenta Int NULL AFTER IdLote"
+    );
+    await agregarColumnaSiNoExiste(
+      connection,
+      "DV_DetalleVenta",
+      "UnidadVenta",
+      "UnidadVenta Varchar(50) NULL AFTER Cantidad"
+    );
+    await agregarColumnaSiNoExiste(
+      connection,
+      "DV_DetalleVenta",
+      "FactorConversion",
+      "FactorConversion Int NOT NULL DEFAULT 1 AFTER UnidadVenta"
+    );
+    await agregarColumnaSiNoExiste(
+      connection,
+      "DV_DetalleVenta",
+      "CantidadUnidadesMinimas",
+      "CantidadUnidadesMinimas Int NOT NULL DEFAULT 0 AFTER FactorConversion"
+    );
+
+    await connection.query(`
+      UPDATE DV_DetalleVenta
+      SET FactorConversion = 1
+      WHERE FactorConversion IS NULL OR FactorConversion <= 0
+    `);
+
+    await connection.query(`
+      UPDATE DV_DetalleVenta
+      SET CantidadUnidadesMinimas = Cantidad
+      WHERE CantidadUnidadesMinimas IS NULL OR CantidadUnidadesMinimas = 0
+    `);
+
+    if (!(await constraintExiste(connection, "DV_DetalleVenta", "FK_DV_UnidadVenta"))) {
+      await connection.query(`
+        ALTER TABLE DV_DetalleVenta
+        ADD CONSTRAINT FK_DV_UnidadVenta
+        FOREIGN KEY (IdUnidadVenta) REFERENCES UV_UnidadVenta(IdUnidadVenta)
+      `);
+    }
+  } finally {
+    connection.release();
+  }
+}
+
+function normalizarUnidadMinima(unidadMedida) {
+  return String(unidadMedida || "UND").trim() || "UND";
+}
+
+function normalizarAbreviaturaUnidad(abreviatura, nombre) {
+  const texto = String(abreviatura || nombre || "UND").trim().toUpperCase();
+  return texto.substring(0, 20) || "UND";
+}
+
+function normalizarUnidadesVenta(unidadesVenta, unidadMedida, precioVentaBase) {
+  const unidadMinima = normalizarUnidadMinima(unidadMedida);
+  const precioBase = Number(precioVentaBase || 0);
+  const entradas = Array.isArray(unidadesVenta) ? unidadesVenta : [];
+  const porAbreviatura = new Map();
+
+  entradas.forEach((unidad) => {
+    const nombre = String(unidad.nombre || unidad.Nombre || "").trim();
+    const factorConversion = parseInt(unidad.factorConversion || unidad.FactorConversion);
+    const precioVenta = unidad.precioVenta ?? unidad.PrecioVenta;
+    const precio = precioVenta === "" || precioVenta === null || precioVenta === undefined
+      ? null
+      : Number(precioVenta);
+
+    if (!nombre || Number.isNaN(factorConversion) || factorConversion <= 0) {
+      return;
+    }
+
+    const abreviatura = normalizarAbreviaturaUnidad(unidad.abreviatura || unidad.Abreviatura, nombre);
+
+    if (porAbreviatura.has(abreviatura)) {
+      return;
+    }
+
+    porAbreviatura.set(abreviatura, {
+      nombre,
+      abreviatura,
+      factorConversion,
+      precioVenta: precio === null || Number.isNaN(precio) ? precioBase * factorConversion : precio,
+      esUnidadMinima: factorConversion === 1 ? "S" : "N",
+    });
+  });
+
+  const tieneUnidadMinima = [...porAbreviatura.values()].some((unidad) => unidad.factorConversion === 1);
+
+  if (!tieneUnidadMinima) {
+    const abreviaturaMinima = normalizarAbreviaturaUnidad(unidadMinima, unidadMinima);
+    porAbreviatura.set(abreviaturaMinima, {
+      nombre: unidadMinima,
+      abreviatura: abreviaturaMinima,
+      factorConversion: 1,
+      precioVenta: precioBase,
+      esUnidadMinima: "S",
+    });
+  }
+
+  return [...porAbreviatura.values()]
+    .map((unidad) => ({
+      ...unidad,
+      esUnidadMinima: unidad.factorConversion === 1 ? "S" : "N",
+    }))
+    .sort((a, b) => b.factorConversion - a.factorConversion || a.nombre.localeCompare(b.nombre));
+}
+
+function crearUnidadVentaPorDefecto(producto) {
+  const unidadMinima = normalizarUnidadMinima(producto.UnidadMedida || producto.UnidadMinima);
+
+  return {
+    IdUnidadVenta: null,
+    IdItem: producto.IdItem,
+    Nombre: unidadMinima,
+    Abreviatura: normalizarAbreviaturaUnidad(unidadMinima, unidadMinima),
+    FactorConversion: 1,
+    PrecioVenta: Number(producto.PrecioVenta || 0),
+    EsUnidadMinima: "S",
+  };
+}
+
+async function obtenerUnidadesVentaPorItems(connection, idsItems) {
+  const ids = [...new Set(idsItems.map((id) => parseInt(id)).filter((id) => !Number.isNaN(id)))];
+  const porItem = new Map();
+
+  if (ids.length === 0) {
+    return porItem;
+  }
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const [rows] = await connection.query(
+    `
+    SELECT
+      IdUnidadVenta,
+      IdItem,
+      Nombre,
+      Abreviatura,
+      FactorConversion,
+      PrecioVenta,
+      EsUnidadMinima
+    FROM UV_UnidadVenta
+    WHERE Estado = 'A'
+      AND IdItem IN (${placeholders})
+    ORDER BY IdItem ASC, FactorConversion DESC, Nombre ASC
+    `,
+    ids
+  );
+
+  rows.forEach((unidad) => {
+    if (!porItem.has(unidad.IdItem)) {
+      porItem.set(unidad.IdItem, []);
+    }
+
+    porItem.get(unidad.IdItem).push({
+      ...unidad,
+      FactorConversion: Number(unidad.FactorConversion),
+      PrecioVenta: unidad.PrecioVenta === null ? null : Number(unidad.PrecioVenta),
+    });
+  });
+
+  return porItem;
+}
+
+function agregarUnidadesVentaAProducto(producto, unidadesPorItem) {
+  const unidades = unidadesPorItem.get(producto.IdItem) || [];
+  const unidadMinima = normalizarUnidadMinima(producto.UnidadMedida);
+  const unidadesConPrecio = unidades.map((unidad) => ({
+    ...unidad,
+    PrecioVenta: unidad.PrecioVenta === null
+      ? Number(producto.PrecioVenta || 0) * Number(unidad.FactorConversion)
+      : unidad.PrecioVenta,
+  }));
+
+  return {
+    ...producto,
+    UnidadMinima: unidadMinima,
+    UnidadesVenta: unidadesConPrecio.length > 0 ? unidadesConPrecio : [crearUnidadVentaPorDefecto(producto)],
+  };
+}
+
+async function guardarUnidadesVentaProducto(connection, idItem, unidadesVenta, unidadMedida, precioVentaBase) {
+  const unidadesNormalizadas = normalizarUnidadesVenta(unidadesVenta, unidadMedida, precioVentaBase);
+
+  await connection.query(
+    `
+    UPDATE UV_UnidadVenta
+    SET Estado = 'I'
+    WHERE IdItem = ?
+    `,
+    [idItem]
+  );
+
+  for (const unidad of unidadesNormalizadas) {
+    await connection.query(
+      `
+      INSERT INTO UV_UnidadVenta
+      (IdItem, Nombre, Abreviatura, FactorConversion, PrecioVenta, EsUnidadMinima, Estado)
+      VALUES (?, ?, ?, ?, ?, ?, 'A')
+      ON DUPLICATE KEY UPDATE
+        Nombre = VALUES(Nombre),
+        FactorConversion = VALUES(FactorConversion),
+        PrecioVenta = VALUES(PrecioVenta),
+        EsUnidadMinima = VALUES(EsUnidadMinima),
+        Estado = 'A'
+      `,
+      [
+        idItem,
+        unidad.nombre,
+        unidad.abreviatura,
+        unidad.factorConversion,
+        unidad.precioVenta,
+        unidad.esUnidadMinima,
+      ]
+    );
+  }
+}
+
+async function obtenerUnidadVentaParaDetalle(connection, idItem, idUnidadVenta, producto) {
+  if (idUnidadVenta) {
+    const [rows] = await connection.query(
+      `
+      SELECT
+        IdUnidadVenta,
+        Nombre,
+        Abreviatura,
+        FactorConversion,
+        PrecioVenta
+      FROM UV_UnidadVenta
+      WHERE IdUnidadVenta = ?
+        AND IdItem = ?
+        AND Estado = 'A'
+      LIMIT 1
+      `,
+      [idUnidadVenta, idItem]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("La unidad de venta seleccionada no pertenece al producto");
+    }
+
+    const unidad = rows[0];
+
+    return {
+      idUnidadVenta: unidad.IdUnidadVenta,
+      nombre: unidad.Nombre,
+      factorConversion: Number(unidad.FactorConversion),
+      precioVenta: unidad.PrecioVenta === null
+        ? Number(producto.PrecioVenta || 0) * Number(unidad.FactorConversion)
+        : Number(unidad.PrecioVenta),
+    };
+  }
+
+  const unidadDefecto = crearUnidadVentaPorDefecto(producto);
+
+  return {
+    idUnidadVenta: null,
+    nombre: unidadDefecto.Nombre,
+    factorConversion: unidadDefecto.FactorConversion,
+    precioVenta: unidadDefecto.PrecioVenta,
+  };
+}
+
 async function asegurarDatosIniciales() {
+  await asegurarEsquemaUnidadesVenta();
   await asegurarUsuariosIniciales();
   await asegurarCatalogosInventario();
 }
@@ -888,6 +1217,7 @@ app.get("/api/productos", async (req, res) => {
         i.Descripcion,
         i.PrecioVenta,
         i.PrecioCompra,
+        i.UnidadMedida,
         i.StockMinimo,
         i.Estado,
         c.Nombre AS Categoria,
@@ -903,7 +1233,10 @@ app.get("/api/productos", async (req, res) => {
       ORDER BY i.IdItem DESC
     `);
 
-    res.json(rows);
+    const unidadesPorItem = await obtenerUnidadesVentaPorItems(pool, rows.map((producto) => producto.IdItem));
+    const productos = rows.map((producto) => agregarUnidadesVentaAProducto(producto, unidadesPorItem));
+
+    res.json(productos);
   } catch (error) {
     console.error("Error al listar productos:", error);
     res.status(500).json({ error: "Error al listar productos" });
@@ -927,16 +1260,22 @@ app.post("/api/productos", async (req, res) => {
     unidadMedida,
     stockMinimo,
     usuarioRegistro,
+    unidadesVenta,
   } = req.body;
+  const precioVentaNumero = parseFloat(precioVenta);
 
-  if (!nombre || !precioVenta || !idCategoria || !idMarca || !idPresentacion) {
+  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
   }
 
+  const connection = await pool.getConnection();
+
   try {
-    const [result] = await pool.query(
+    await connection.beginTransaction();
+
+    const [result] = await connection.query(
       `
       INSERT INTO IT_Item
       (
@@ -951,7 +1290,7 @@ app.post("/api/productos", async (req, res) => {
         codigoBarras,
         nombre,
         descripcion,
-        precioVenta,
+        precioVentaNumero,
         precioCompra,
         idCategoria,
         idMarca,
@@ -965,13 +1304,20 @@ app.post("/api/productos", async (req, res) => {
       ]
     );
 
+    await guardarUnidadesVentaProducto(connection, result.insertId, unidadesVenta, unidadMedida, precioVentaNumero);
+
+    await connection.commit();
+
     res.status(201).json({
       mensaje: "Producto registrado correctamente",
       id: result.insertId,
     });
   } catch (error) {
+    await connection.rollback();
     console.error("Error al registrar producto:", error);
     res.status(500).json({ error: "Error al registrar producto" });
+  } finally {
+    connection.release();
   }
 });
 
@@ -992,7 +1338,9 @@ app.get("/api/productos/:id", async (req, res) => {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    res.json(rows[0]);
+    const unidadesPorItem = await obtenerUnidadesVentaPorItems(pool, [id]);
+
+    res.json(agregarUnidadesVentaAProducto(rows[0], unidadesPorItem));
   } catch (error) {
     console.error("Error al obtener producto:", error);
     res.status(500).json({ error: "Error al obtener producto" });
@@ -1018,16 +1366,22 @@ app.put("/api/productos/:id", async (req, res) => {
     unidadMedida,
     stockMinimo,
     usuarioModifica,
+    unidadesVenta,
   } = req.body;
+  const precioVentaNumero = parseFloat(precioVenta);
 
-  if (!nombre || !precioVenta || !idCategoria || !idMarca || !idPresentacion) {
+  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
   }
 
+  const connection = await pool.getConnection();
+
   try {
-    const [result] = await pool.query(
+    await connection.beginTransaction();
+
+    const [result] = await connection.query(
       `
       UPDATE IT_Item
       SET
@@ -1054,7 +1408,7 @@ app.put("/api/productos/:id", async (req, res) => {
         codigoBarras,
         nombre,
         descripcion,
-        precioVenta,
+        precioVentaNumero,
         precioCompra,
         idCategoria,
         idMarca,
@@ -1070,13 +1424,21 @@ app.put("/api/productos/:id", async (req, res) => {
     );
 
     if (result.affectedRows === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
+    await guardarUnidadesVentaProducto(connection, id, unidadesVenta, unidadMedida, precioVentaNumero);
+
+    await connection.commit();
+
     res.json({ mensaje: "Producto actualizado correctamente" });
   } catch (error) {
+    await connection.rollback();
     console.error("Error al actualizar producto:", error);
     res.status(500).json({ error: "Error al actualizar producto" });
+  } finally {
+    connection.release();
   }
 });
 
@@ -1120,6 +1482,7 @@ app.get("/api/lotes", async (req, res) => {
         l.FechaIngreso,
         l.CostoCompraLote,
         l.StockActual,
+        i.UnidadMedida AS UnidadMinima,
         l.Estado
       FROM LT_Lote l
       INNER JOIN IT_Item i ON l.IdItem = i.IdItem
@@ -1127,7 +1490,23 @@ app.get("/api/lotes", async (req, res) => {
       ORDER BY l.IdLote DESC
     `);
 
-    res.json(rows);
+    const unidadesPorItem = await obtenerUnidadesVentaPorItems(pool, rows.map((lote) => lote.IdItem));
+    const lotes = rows.map((lote) => {
+      const producto = {
+        IdItem: lote.IdItem,
+        UnidadMedida: lote.UnidadMinima,
+        PrecioVenta: 0,
+      };
+
+      return {
+        ...lote,
+        UnidadMinima: normalizarUnidadMinima(lote.UnidadMinima),
+        StockActualMinimo: Number(lote.StockActual),
+        UnidadesVenta: agregarUnidadesVentaAProducto(producto, unidadesPorItem).UnidadesVenta,
+      };
+    });
+
+    res.json(lotes);
   } catch (error) {
     console.error("Error al listar lotes:", error);
     res.status(500).json({ error: "Error al listar lotes" });
@@ -1224,9 +1603,13 @@ app.get("/api/lotes/:id", async (req, res) => {
   try {
     const [rows] = await pool.query(
       `
-      SELECT *
-      FROM LT_Lote
-      WHERE IdLote = ?
+      SELECT
+        l.*,
+        i.UnidadMedida AS UnidadMinima,
+        i.PrecioVenta
+      FROM LT_Lote l
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      WHERE l.IdLote = ?
       `,
       [id]
     );
@@ -1235,7 +1618,14 @@ app.get("/api/lotes/:id", async (req, res) => {
       return res.status(404).json({ error: "Lote no encontrado" });
     }
 
-    res.json(rows[0]);
+    const unidadesPorItem = await obtenerUnidadesVentaPorItems(pool, [rows[0].IdItem]);
+
+    res.json({
+      ...rows[0],
+      UnidadMinima: normalizarUnidadMinima(rows[0].UnidadMinima),
+      StockActualMinimo: Number(rows[0].StockActual),
+      UnidadesVenta: agregarUnidadesVentaAProducto(rows[0], unidadesPorItem).UnidadesVenta,
+    });
   } catch (error) {
     console.error("Error al obtener lote:", error);
     res.status(500).json({ error: "Error al obtener lote" });
@@ -1387,6 +1777,7 @@ app.get("/api/alertas", async (req, res) => {
         l.NumeroLote,
         l.StockActual,
         i.StockMinimo,
+        i.UnidadMedida AS UnidadMinima,
         pv.RazonSocial AS Proveedor
       FROM LT_Lote l
       INNER JOIN IT_Item i ON l.IdItem = i.IdItem
@@ -1419,6 +1810,7 @@ app.get("/api/lotes-disponibles", async (req, res) => {
         i.IdItem,
         i.Nombre AS Producto,
         i.PrecioVenta,
+        i.UnidadMedida AS UnidadMinima,
         m.Nombre AS Marca,
         pr.Nombre AS Presentacion
       FROM LT_Lote l
@@ -1431,7 +1823,23 @@ app.get("/api/lotes-disponibles", async (req, res) => {
       ORDER BY i.Nombre ASC
     `);
 
-    res.json(rows);
+    const unidadesPorItem = await obtenerUnidadesVentaPorItems(pool, rows.map((lote) => lote.IdItem));
+    const lotes = rows.map((lote) => {
+      const producto = {
+        IdItem: lote.IdItem,
+        UnidadMedida: lote.UnidadMinima,
+        PrecioVenta: lote.PrecioVenta,
+      };
+
+      return {
+        ...lote,
+        UnidadMinima: normalizarUnidadMinima(lote.UnidadMinima),
+        StockActualMinimo: Number(lote.StockActual),
+        UnidadesVenta: agregarUnidadesVentaAProducto(producto, unidadesPorItem).UnidadesVenta,
+      };
+    });
+
+    res.json(lotes);
   } catch (error) {
     console.error("Error al listar lotes disponibles:", error);
     res.status(500).json({ error: "Error al listar lotes disponibles" });
@@ -1549,15 +1957,20 @@ app.get("/api/ventas/:id", async (req, res) => {
       SELECT 
         dv.IdDetalleVenta,
         dv.IdLote,
+        dv.IdUnidadVenta,
         i.Nombre AS Producto,
         l.NumeroLote,
         dv.Cantidad,
+        COALESCE(uv.Nombre, dv.UnidadVenta, i.UnidadMedida, 'UND') AS UnidadVenta,
+        dv.FactorConversion,
+        dv.CantidadUnidadesMinimas,
         dv.PrecioUnitario,
         dv.Descuento,
         dv.Subtotal
       FROM DV_DetalleVenta dv
       INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
       INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      LEFT JOIN UV_UnidadVenta uv ON dv.IdUnidadVenta = uv.IdUnidadVenta
       WHERE dv.IdVenta = ?
       `,
       [id]
@@ -1589,29 +2002,34 @@ app.post("/api/ventas", async (req, res) => {
     const idUsuario = req.usuario.idUsuario;
     const numeroVenta = `V${Date.now().toString().slice(-9)}`;
     const lotesBloqueados = new Map();
+    const detallesPreparados = [];
 
     let total = 0;
 
     for (const detalle of detalles) {
       const idLoteDetalle = parseInt(detalle.idLote);
+      const idUnidadVenta = detalle.idUnidadVenta ? parseInt(detalle.idUnidadVenta) : null;
       const cantidadDetalle = parseInt(detalle.cantidad);
-      const precioUnitario = parseFloat(detalle.precioUnitario);
       const descuento = detalle.descuento ? parseFloat(detalle.descuento) : 0;
 
       if (!idLoteDetalle || Number.isNaN(cantidadDetalle) || cantidadDetalle <= 0) {
         throw new Error("La cantidad de venta debe ser mayor a 0");
       }
 
-      if (Number.isNaN(precioUnitario) || precioUnitario <= 0) {
-        throw new Error("El precio unitario debe ser mayor a 0");
-      }
-
       if (!lotesBloqueados.has(idLoteDetalle)) {
         const [lotes] = await connection.query(
           `
-          SELECT StockActual, CostoCompraLote
-          FROM LT_Lote
-          WHERE IdLote = ?
+          SELECT
+            l.StockActual,
+            l.CostoCompraLote,
+            l.IdItem,
+            i.PrecioVenta,
+            i.UnidadMedida
+          FROM LT_Lote l
+          INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+          WHERE l.IdLote = ?
+            AND l.Estado = 'A'
+            AND i.Estado = 'A'
           FOR UPDATE
           `,
           [idLoteDetalle]
@@ -1624,19 +2042,61 @@ app.post("/api/ventas", async (req, res) => {
         lotesBloqueados.set(idLoteDetalle, {
           stockAnterior: Number(lotes[0].StockActual),
           costoUnitario: lotes[0].CostoCompraLote,
+          idItem: lotes[0].IdItem,
+          precioVenta: lotes[0].PrecioVenta,
+          unidadMedida: lotes[0].UnidadMedida,
           cantidadTotal: 0,
           cantidadProcesada: 0,
         });
       }
 
       const loteBloqueado = lotesBloqueados.get(idLoteDetalle);
-      loteBloqueado.cantidadTotal += cantidadDetalle;
+      const unidadVenta = await obtenerUnidadVentaParaDetalle(
+        connection,
+        loteBloqueado.idItem,
+        idUnidadVenta,
+        {
+          IdItem: loteBloqueado.idItem,
+          PrecioVenta: loteBloqueado.precioVenta,
+          UnidadMedida: loteBloqueado.unidadMedida,
+        }
+      );
+      const cantidadUnidadesMinimas = cantidadDetalle * unidadVenta.factorConversion;
+      const precioUnitario = detalle.precioUnitario === undefined || detalle.precioUnitario === null || detalle.precioUnitario === ""
+        ? unidadVenta.precioVenta
+        : parseFloat(detalle.precioUnitario);
+
+      if (Number.isNaN(precioUnitario) || precioUnitario <= 0) {
+        throw new Error("El precio unitario debe ser mayor a 0");
+      }
+
+      if (Number.isNaN(descuento) || descuento < 0) {
+        throw new Error("El descuento no puede ser negativo");
+      }
+
+      loteBloqueado.cantidadTotal += cantidadUnidadesMinimas;
 
       if (loteBloqueado.stockAnterior < loteBloqueado.cantidadTotal) {
         throw new Error("Stock insuficiente para uno de los productos");
       }
 
       const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
+
+      if (subtotalDetalle < 0) {
+        throw new Error("El descuento no puede superar el subtotal del producto");
+      }
+
+      detallesPreparados.push({
+        idLoteDetalle,
+        idUnidadVenta: unidadVenta.idUnidadVenta,
+        unidadVenta: unidadVenta.nombre,
+        cantidadDetalle,
+        factorConversion: unidadVenta.factorConversion,
+        cantidadUnidadesMinimas,
+        precioUnitario,
+        descuento,
+        subtotalDetalle,
+      });
 
       total += subtotalDetalle;
     }
@@ -1671,29 +2131,33 @@ app.post("/api/ventas", async (req, res) => {
 
     const idVenta = ventaResult.insertId;
 
-    for (const detalle of detalles) {
-      const idLoteDetalle = parseInt(detalle.idLote);
-      const cantidadDetalle = parseInt(detalle.cantidad);
-      const precioUnitario = parseFloat(detalle.precioUnitario);
-      const descuento = detalle.descuento ? parseFloat(detalle.descuento) : 0;
-      const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
+    for (const detalle of detallesPreparados) {
+      const idLoteDetalle = detalle.idLoteDetalle;
       const loteBloqueado = lotesBloqueados.get(idLoteDetalle);
       const stockAnteriorMovimiento = loteBloqueado.stockAnterior - loteBloqueado.cantidadProcesada;
-      const stockNuevoMovimiento = stockAnteriorMovimiento - cantidadDetalle;
+      const stockNuevoMovimiento = stockAnteriorMovimiento - detalle.cantidadUnidadesMinimas;
 
       await connection.query(
         `
         INSERT INTO DV_DetalleVenta
-        (IdVenta, IdLote, Cantidad, PrecioUnitario, Descuento, Subtotal)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (
+          IdVenta, IdLote, IdUnidadVenta, Cantidad, UnidadVenta,
+          FactorConversion, CantidadUnidadesMinimas,
+          PrecioUnitario, Descuento, Subtotal
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           idVenta,
           idLoteDetalle,
-          cantidadDetalle,
-          precioUnitario,
-          descuento,
-          subtotalDetalle,
+          detalle.idUnidadVenta,
+          detalle.cantidadDetalle,
+          detalle.unidadVenta,
+          detalle.factorConversion,
+          detalle.cantidadUnidadesMinimas,
+          detalle.precioUnitario,
+          detalle.descuento,
+          detalle.subtotalDetalle,
         ]
       );
 
@@ -1703,7 +2167,7 @@ app.post("/api/ventas", async (req, res) => {
         SET StockActual = StockActual - ?
         WHERE IdLote = ?
         `,
-        [cantidadDetalle, idLoteDetalle]
+        [detalle.cantidadUnidadesMinimas, idLoteDetalle]
       );
 
       await registrarMovimientoInventario(connection, {
@@ -1714,14 +2178,14 @@ app.post("/api/ventas", async (req, res) => {
         numeroDocumento: numeroComprobante || numeroVenta,
         tablaReferencia: "VE_Venta",
         idReferencia: idVenta,
-        cantidadSalida: cantidadDetalle,
+        cantidadSalida: detalle.cantidadUnidadesMinimas,
         stockAnterior: stockAnteriorMovimiento,
         stockNuevo: stockNuevoMovimiento,
         costoUnitario: loteBloqueado.costoUnitario,
-        motivo: "Salida por venta",
+        motivo: `Salida por venta (${detalle.cantidadDetalle} ${detalle.unidadVenta})`,
       });
 
-      loteBloqueado.cantidadProcesada += cantidadDetalle;
+      loteBloqueado.cantidadProcesada += detalle.cantidadUnidadesMinimas;
     }
 
     await connection.commit();
@@ -1768,6 +2232,7 @@ app.get("/api/kardex", async (req, res) => {
         m.IdMovimiento,
         m.FechaMovimiento,
         i.Nombre AS Producto,
+        i.UnidadMedida AS UnidadMinima,
         l.NumeroLote,
         tm.Codigo AS CodigoMovimiento,
         tm.Nombre AS TipoMovimiento,

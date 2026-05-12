@@ -29,6 +29,8 @@ const unidadMedida = document.getElementById("unidadMedida");
 const stockMinimo = document.getElementById("stockMinimo");
 const requiereReceta = document.getElementById("requiereReceta");
 const esControlado = document.getElementById("esControlado");
+const tablaUnidadesVenta = document.getElementById("tablaUnidadesVenta");
+const btnAgregarUnidadVenta = document.getElementById("btnAgregarUnidadVenta");
 
 let productos = [];
 
@@ -49,6 +51,10 @@ btnCancelar.addEventListener("click", () => {
   cerrarModal();
 });
 
+btnAgregarUnidadVenta.addEventListener("click", () => {
+  agregarFilaUnidadVenta();
+});
+
 inputBuscar.addEventListener("input", () => {
   const texto = inputBuscar.value.toLowerCase();
 
@@ -62,6 +68,20 @@ inputBuscar.addEventListener("input", () => {
   });
 
   mostrarProductos(filtrados);
+});
+
+tablaUnidadesVenta.addEventListener("click", (event) => {
+  const boton = event.target.closest("[data-accion='eliminar-unidad']");
+
+  if (!boton) {
+    return;
+  }
+
+  boton.closest("tr")?.remove();
+
+  if (tablaUnidadesVenta.querySelectorAll("tr").length === 0) {
+    agregarFilaUnidadVenta();
+  }
 });
 
 formProducto.addEventListener("submit", async (event) => {
@@ -88,6 +108,7 @@ formProducto.addEventListener("submit", async (event) => {
     stockMinimo: stockMinimo.value ? parseInt(stockMinimo.value) : 0,
     usuarioRegistro: "admin",
     usuarioModifica: "admin",
+    unidadesVenta: obtenerUnidadesVentaFormulario(),
   };
 
   try {
@@ -138,7 +159,7 @@ async function cargarProductos() {
     console.error("Error al cargar productos:", error);
     tablaProductos.innerHTML = `
       <tr>
-        <td colspan="10">Error al cargar productos</td>
+        <td colspan="12">Error al cargar productos</td>
       </tr>
     `;
   }
@@ -148,7 +169,7 @@ function mostrarProductos(lista) {
   if (lista.length === 0) {
     tablaProductos.innerHTML = `
       <tr>
-        <td colspan="10">No hay productos registrados</td>
+        <td colspan="12">No hay productos registrados</td>
       </tr>
     `;
     return;
@@ -164,6 +185,8 @@ function mostrarProductos(lista) {
           <td>${producto.Categoria}</td>
           <td>${producto.Marca}</td>
           <td>${producto.Presentacion}</td>
+          <td>${producto.UnidadMinima || producto.UnidadMedida || "UND"}</td>
+          <td>${formatearUnidadesVenta(producto.UnidadesVenta)}</td>
           <td>${producto.Proveedor || "-"}</td>
           <td>S/ ${Number(producto.PrecioVenta).toFixed(2)}</td>
           <td>${producto.StockMinimo}</td>
@@ -214,9 +237,18 @@ function abrirModalNuevo() {
   tituloModal.textContent = "Nuevo producto";
   formProducto.reset();
   idProducto.value = "";
+  unidadMedida.value = "UND";
   stockMinimo.value = 0;
   requiereReceta.value = "N";
   esControlado.value = "N";
+  renderizarUnidadesVenta([
+    {
+      Nombre: "UND",
+      Abreviatura: "UND",
+      FactorConversion: 1,
+      PrecioVenta: precioVenta.value || "",
+    },
+  ]);
   modalProducto.classList.add("mostrar");
 }
 
@@ -251,6 +283,7 @@ async function editarProducto(id) {
     stockMinimo.value = producto.StockMinimo || 0;
     requiereReceta.value = producto.RequiereReceta || "N";
     esControlado.value = producto.EsControlado || "N";
+    renderizarUnidadesVenta(producto.UnidadesVenta || []);
 
     modalProducto.classList.add("mostrar");
   } catch (error) {
@@ -302,6 +335,11 @@ function validarProducto() {
     return false;
   }
 
+  if (!unidadMedida.value.trim()) {
+    alert("Ingrese la unidad minima del producto");
+    return false;
+  }
+
   if (!idCategoria.value) {
     alert("Seleccione una categoría");
     return false;
@@ -322,5 +360,145 @@ function validarProducto() {
     return false;
   }
 
+  if (!validarUnidadesVentaFormulario()) {
+    return false;
+  }
+
   return true;
+}
+
+function renderizarUnidadesVenta(unidades) {
+  tablaUnidadesVenta.innerHTML = "";
+
+  const lista = unidades.length > 0
+    ? unidades
+    : [
+        {
+          Nombre: unidadMedida.value.trim() || "UND",
+          Abreviatura: unidadMedida.value.trim() || "UND",
+          FactorConversion: 1,
+          PrecioVenta: precioVenta.value || "",
+        },
+      ];
+
+  lista.forEach((unidad) => {
+    agregarFilaUnidadVenta(unidad);
+  });
+}
+
+function agregarFilaUnidadVenta(unidad = {}) {
+  const fila = document.createElement("tr");
+  const nombre = unidad.Nombre || unidad.nombre || "";
+  const abreviatura = unidad.Abreviatura || unidad.abreviatura || "";
+  const factorConversion = unidad.FactorConversion || unidad.factorConversion || 1;
+  const precio = unidad.PrecioVenta ?? unidad.precioVenta ?? "";
+
+  fila.innerHTML = `
+    <td>
+      <input type="text" class="unidad-nombre" value="${escaparHtml(nombre)}" placeholder="Caja">
+    </td>
+    <td>
+      <input type="text" class="unidad-abreviatura" value="${escaparHtml(abreviatura)}" placeholder="CAJ">
+    </td>
+    <td>
+      <input type="number" class="unidad-factor" min="1" step="1" value="${factorConversion}">
+    </td>
+    <td>
+      <input type="number" class="unidad-precio" min="0" step="0.01" value="${precio === null ? "" : precio}">
+    </td>
+    <td>
+      <button type="button" class="btn-icono btn-eliminar" data-accion="eliminar-unidad">
+        <i class="fa-solid fa-trash"></i>
+      </button>
+    </td>
+  `;
+
+  tablaUnidadesVenta.appendChild(fila);
+}
+
+function obtenerUnidadesVentaFormulario() {
+  return [...tablaUnidadesVenta.querySelectorAll("tr")]
+    .map((fila) => {
+      const nombreUnidad = fila.querySelector(".unidad-nombre").value.trim();
+      const abreviaturaUnidad = fila.querySelector(".unidad-abreviatura").value.trim();
+      const factorConversion = parseInt(fila.querySelector(".unidad-factor").value);
+      const precio = fila.querySelector(".unidad-precio").value;
+
+      return {
+        nombre: nombreUnidad,
+        abreviatura: abreviaturaUnidad,
+        factorConversion,
+        precioVenta: precio === "" ? null : parseFloat(precio),
+      };
+    })
+    .filter((unidad) => unidad.nombre || unidad.abreviatura || unidad.factorConversion);
+}
+
+function validarUnidadesVentaFormulario() {
+  const unidades = obtenerUnidadesVentaFormulario();
+
+  if (unidades.length === 0) {
+    alert("Registre al menos una unidad de venta");
+    return false;
+  }
+
+  const abreviaturas = new Set();
+  let tieneUnidadMinima = false;
+
+  for (const unidad of unidades) {
+    if (!unidad.nombre) {
+      alert("Cada unidad de venta debe tener nombre");
+      return false;
+    }
+
+    if (!unidad.abreviatura) {
+      alert("Cada unidad de venta debe tener abreviatura");
+      return false;
+    }
+
+    if (Number.isNaN(unidad.factorConversion) || unidad.factorConversion <= 0) {
+      alert("El factor de conversion debe ser mayor a 0");
+      return false;
+    }
+
+    if (unidad.precioVenta !== null && (Number.isNaN(unidad.precioVenta) || unidad.precioVenta < 0)) {
+      alert("El precio de unidad de venta no puede ser negativo");
+      return false;
+    }
+
+    const clave = unidad.abreviatura.toUpperCase();
+
+    if (abreviaturas.has(clave)) {
+      alert("No repitas abreviaturas de unidad de venta");
+      return false;
+    }
+
+    abreviaturas.add(clave);
+    tieneUnidadMinima = tieneUnidadMinima || unidad.factorConversion === 1;
+  }
+
+  if (!tieneUnidadMinima) {
+    alert("Debe existir una unidad de venta con factor 1");
+    return false;
+  }
+
+  return true;
+}
+
+function formatearUnidadesVenta(unidades = []) {
+  if (!unidades.length) {
+    return "-";
+  }
+
+  return unidades
+    .map((unidad) => `<span class="chip-unidad">${unidad.Abreviatura || unidad.Nombre} x${unidad.FactorConversion}</span>`)
+    .join(" ");
+}
+
+function escaparHtml(valor) {
+  return String(valor ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

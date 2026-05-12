@@ -143,7 +143,7 @@ function mostrarLotes(lista) {
           <td>${formatearFecha(lote.FechaIngreso)}</td>
           <td>${formatearFecha(lote.FechaVencimiento)}</td>
           <td>${lote.CostoCompraLote ? "S/ " + Number(lote.CostoCompraLote).toFixed(2) : "-"}</td>
-          <td>${lote.StockActual}</td>
+          <td>${formatearStockLote(lote)}</td>
           <td>
             <div class="acciones-tabla">
               <button class="btn-icono btn-editar" onclick="editarLote(${lote.IdLote})">
@@ -171,7 +171,7 @@ async function cargarProductos() {
     productos.forEach((producto) => {
       idItem.innerHTML += `
         <option value="${producto.IdItem}">
-          ${producto.Nombre} - ${producto.Marca || ""}
+          ${producto.Nombre} - ${producto.Marca || ""} (${producto.UnidadMinima || producto.UnidadMedida || "UND"})
         </option>
       `;
     });
@@ -282,6 +282,46 @@ function formatearFecha(fecha) {
   }
 
   return new Date(fecha).toLocaleDateString("es-PE");
+}
+
+function formatearStockLote(lote) {
+  const unidadMinima = lote.UnidadMinima || "UND";
+  const stock = Number(lote.StockActual || 0);
+  const desglose = desglosarStock(stock, lote.UnidadesVenta || [], unidadMinima);
+
+  return `
+    <strong>${stock} ${unidadMinima}</strong>
+    <span class="texto-secundario">${desglose}</span>
+  `;
+}
+
+function desglosarStock(stock, unidades, unidadMinima) {
+  const unidadesOrdenadas = unidades
+    .filter((unidad) => Number(unidad.FactorConversion) > 1)
+    .sort((a, b) => Number(b.FactorConversion) - Number(a.FactorConversion));
+
+  if (unidadesOrdenadas.length === 0) {
+    return "";
+  }
+
+  let restante = stock;
+  const partes = [];
+
+  unidadesOrdenadas.forEach((unidad) => {
+    const factor = Number(unidad.FactorConversion);
+    const cantidad = Math.floor(restante / factor);
+
+    if (cantidad > 0) {
+      partes.push(`${cantidad} ${unidad.Abreviatura || unidad.Nombre}`);
+      restante -= cantidad * factor;
+    }
+  });
+
+  if (restante > 0) {
+    partes.push(`${restante} ${unidadMinima}`);
+  }
+
+  return partes.length > 0 ? partes.join(" + ") : "";
 }
 
 function convertirFechaInput(fecha) {

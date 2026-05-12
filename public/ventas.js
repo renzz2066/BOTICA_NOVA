@@ -2,6 +2,7 @@ const API_LOTES_DISPONIBLES = "/api/lotes-disponibles";
 const API_VENTAS = "/api/ventas";
 
 const idLote = document.getElementById("idLote");
+const idUnidadVenta = document.getElementById("idUnidadVenta");
 const cantidad = document.getElementById("cantidad");
 const precioUnitario = document.getElementById("precioUnitario");
 const descuento = document.getElementById("descuento");
@@ -34,10 +35,17 @@ idLote.addEventListener("change", () => {
   const lote = obtenerLoteSeleccionado();
 
   if (lote) {
-    precioUnitario.value = Number(lote.PrecioVenta).toFixed(2);
+    cargarUnidadesVenta(lote);
   } else {
+    idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
     precioUnitario.value = "";
   }
+});
+
+idUnidadVenta.addEventListener("change", () => {
+  const unidad = obtenerUnidadSeleccionada();
+
+  precioUnitario.value = unidad ? Number(unidad.PrecioVenta).toFixed(2) : "";
 });
 
 btnAgregar.addEventListener("click", () => {
@@ -62,7 +70,7 @@ async function cargarLotesDisponibles() {
     lotesDisponibles.forEach((lote) => {
       idLote.innerHTML += `
         <option value="${lote.IdLote}">
-          ${lote.Producto} - ${lote.Marca} - Lote: ${lote.NumeroLote} - Stock: ${lote.StockActual}
+          ${lote.Producto} - ${lote.Marca} - Lote: ${lote.NumeroLote} - Stock: ${formatearStockMinimo(lote)}
         </option>
       `;
     });
@@ -113,22 +121,29 @@ async function cargarVentas() {
 
 function agregarProducto() {
   const lote = obtenerLoteSeleccionado();
+  const unidad = obtenerUnidadSeleccionada();
 
   if (!lote) {
     alert("Seleccione un producto");
     return;
   }
 
+  if (!unidad) {
+    alert("Seleccione una unidad de venta");
+    return;
+  }
+
   const cantidadVenta = parseInt(cantidad.value);
   const precio = parseFloat(precioUnitario.value);
   const descuentoVenta = descuento.value ? parseFloat(descuento.value) : 0;
+  const cantidadMinima = cantidadVenta * Number(unidad.FactorConversion);
 
   if (!cantidadVenta || cantidadVenta <= 0) {
     alert("La cantidad debe ser mayor a 0");
     return;
   }
 
-  if (cantidadVenta > lote.StockActual) {
+  if (cantidadMinima > lote.StockActual) {
     alert("No hay stock suficiente para este lote");
     return;
   }
@@ -138,29 +153,52 @@ function agregarProducto() {
     return;
   }
 
-  if (descuentoVenta < 0) {
+  if (Number.isNaN(descuentoVenta) || descuentoVenta < 0) {
     alert("El descuento no puede ser negativo");
     return;
   }
 
-  const productoExistente = detalleVenta.find((item) => item.idLote === lote.IdLote);
+  if (cantidadVenta * precio - descuentoVenta < 0) {
+    alert("El descuento no puede superar el subtotal del producto");
+    return;
+  }
+
+  const stockReservado = detalleVenta
+    .filter((item) => item.idLote === lote.IdLote)
+    .reduce((total, item) => total + item.cantidadUnidadesMinimas, 0);
+  const productoExistente = detalleVenta.find((item) => {
+    return item.idLote === lote.IdLote && String(item.idUnidadVenta || "") === String(unidad.IdUnidadVenta || "");
+  });
 
   if (productoExistente) {
     const nuevaCantidad = productoExistente.cantidad + cantidadVenta;
+    const nuevaCantidadMinima = nuevaCantidad * productoExistente.factorConversion;
+    const reservadoSinLinea = stockReservado - productoExistente.cantidadUnidadesMinimas;
 
-    if (nuevaCantidad > lote.StockActual) {
+    if (reservadoSinLinea + nuevaCantidadMinima > lote.StockActual) {
       alert("La cantidad total supera el stock disponible");
       return;
     }
 
     productoExistente.cantidad = nuevaCantidad;
+    productoExistente.cantidadUnidadesMinimas = nuevaCantidadMinima;
     productoExistente.subtotal = nuevaCantidad * productoExistente.precioUnitario - productoExistente.descuento;
   } else {
+    if (stockReservado + cantidadMinima > lote.StockActual) {
+      alert("La cantidad total supera el stock disponible");
+      return;
+    }
+
     detalleVenta.push({
       idLote: lote.IdLote,
+      idUnidadVenta: unidad.IdUnidadVenta,
       producto: lote.Producto,
       numeroLote: lote.NumeroLote,
+      unidadVenta: unidad.Nombre,
+      unidadMinima: lote.UnidadMinima || "UND",
+      factorConversion: Number(unidad.FactorConversion),
       cantidad: cantidadVenta,
+      cantidadUnidadesMinimas: cantidadMinima,
       precioUnitario: precio,
       descuento: descuentoVenta,
       subtotal: cantidadVenta * precio - descuentoVenta,
@@ -175,7 +213,7 @@ function mostrarDetalleVenta() {
   if (detalleVenta.length === 0) {
     tablaDetalleVenta.innerHTML = `
       <tr>
-        <td colspan="7">No hay productos agregados</td>
+        <td colspan="8">No hay productos agregados</td>
       </tr>
     `;
     actualizarTotales();
@@ -188,6 +226,10 @@ function mostrarDetalleVenta() {
         <tr>
           <td>${item.producto}</td>
           <td>${item.numeroLote}</td>
+          <td>
+            ${item.unidadVenta}
+            <span class="texto-secundario">x${item.factorConversion} ${item.unidadMinima}</span>
+          </td>
           <td>${item.cantidad}</td>
           <td>S/ ${item.precioUnitario.toFixed(2)}</td>
           <td>S/ ${item.descuento.toFixed(2)}</td>
@@ -224,6 +266,7 @@ async function guardarVenta() {
     detalles: detalleVenta.map((item) => {
       return {
         idLote: item.idLote,
+        idUnidadVenta: item.idUnidadVenta,
         cantidad: item.cantidad,
         precioUnitario: item.precioUnitario,
         descuento: item.descuento,
@@ -264,6 +307,50 @@ function obtenerLoteSeleccionado() {
   return lotesDisponibles.find((lote) => lote.IdLote === id);
 }
 
+function cargarUnidadesVenta(lote) {
+  const unidades = lote.UnidadesVenta || [];
+
+  idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
+
+  unidades.forEach((unidad, index) => {
+    const id = unidad.IdUnidadVenta || `default-${index}`;
+    idUnidadVenta.innerHTML += `
+      <option value="${id}" data-index="${index}">
+        ${unidad.Nombre} x ${unidad.FactorConversion} ${lote.UnidadMinima || "UND"}
+      </option>
+    `;
+  });
+
+  if (unidades.length > 0) {
+    const primeraUnidad = unidades[0];
+    idUnidadVenta.value = primeraUnidad.IdUnidadVenta || "default-0";
+    precioUnitario.value = Number(primeraUnidad.PrecioVenta).toFixed(2);
+  } else {
+    precioUnitario.value = Number(lote.PrecioVenta).toFixed(2);
+  }
+}
+
+function obtenerUnidadSeleccionada() {
+  const lote = obtenerLoteSeleccionado();
+
+  if (!lote) {
+    return null;
+  }
+
+  const opcion = idUnidadVenta.options[idUnidadVenta.selectedIndex];
+  const index = opcion?.dataset.index;
+
+  if (index === undefined) {
+    return null;
+  }
+
+  return lote.UnidadesVenta[parseInt(index)];
+}
+
+function formatearStockMinimo(lote) {
+  return `${lote.StockActual} ${lote.UnidadMinima || "UND"}`;
+}
+
 function actualizarTotales() {
   const total = detalleVenta.reduce((acumulado, item) => acumulado + item.subtotal, 0);
   const subtotal = total / 1.18;
@@ -276,6 +363,7 @@ function actualizarTotales() {
 
 function limpiarCamposProducto() {
   idLote.value = "";
+  idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
   cantidad.value = 1;
   precioUnitario.value = "";
   descuento.value = 0;

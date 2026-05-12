@@ -453,6 +453,45 @@ td {
   border-color: #0f766e;
 }
 
+.tabla-unidades-contenedor {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.tabla-unidades th,
+.tabla-unidades td {
+  padding: 8px;
+}
+
+.tabla-unidades input {
+  width: 100%;
+  padding: 9px 10px;
+}
+
+.btn-agregar-unidad {
+  margin-top: 10px;
+  align-self: flex-start;
+}
+
+.chip-unidad {
+  display: inline-flex;
+  align-items: center;
+  background: #eef6f5;
+  color: #115e59;
+  border-radius: 999px;
+  padding: 5px 8px;
+  margin: 2px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.texto-secundario {
+  display: block;
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
 .campo-completo {
   grid-column: span 2;
 }
