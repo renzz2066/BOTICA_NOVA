@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kardex - Botica Nova Salud</title>
+
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="logo">
+        <i class="fa-solid fa-prescription-bottle-medical"></i>
+        <h2>Nova Salud</h2>
+      </div>
+
+      <nav class="menu">
+        <a href="dashboard.html">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a href="proveedores.html">
+          <i class="fa-solid fa-truck"></i>
+          Proveedores
+        </a>
+
+        <a href="productos.html">
+          <i class="fa-solid fa-boxes-stacked"></i>
+          Productos
+        </a>
+
+        <a href="lotes.html">
+          <i class="fa-solid fa-capsules"></i>
+          Lotes
+        </a>
+
+        <a href="kardex.html" class="activo">
+          <i class="fa-solid fa-clipboard-list"></i>
+          Kardex
+        </a>
+
+        <a href="ventas.html">
+          <i class="fa-solid fa-cart-shopping"></i>
+          Ventas
+        </a>
+
+        <a href="alertas.html">
+          <i class="fa-solid fa-bell"></i>
+          Alertas
+        </a>
+
+        <a href="chatbot.html">
+          <i class="fa-solid fa-robot"></i>
+          Asistente
+        </a>
+      </nav>
+    </aside>
+
+    <main class="contenido">
+
+      <header class="barra-superior">
+        <div>
+          <h1>Kardex</h1>
+          <p>Historial de entradas, salidas y ajustes de inventario</p>
+        </div>
+
+        <button class="btn" id="btnActualizar">
+          <i class="fa-solid fa-rotate"></i>
+          Actualizar
+        </button>
+      </header>
+
+      <section class="tarjetas tarjetas-kardex">
+        <div class="tarjeta">
+          <div class="icono azul">
+            <i class="fa-solid fa-list"></i>
+          </div>
+          <div>
+            <h3 id="totalMovimientos">0</h3>
+            <p>Movimientos</p>
+          </div>
+        </div>
+
+        <div class="tarjeta">
+          <div class="icono verde">
+            <i class="fa-solid fa-arrow-down"></i>
+          </div>
+          <div>
+            <h3 id="totalEntradas">0</h3>
+            <p>Unidades de entrada</p>
+          </div>
+        </div>
+
+        <div class="tarjeta">
+          <div class="icono naranja">
+            <i class="fa-solid fa-arrow-up"></i>
+          </div>
+          <div>
+            <h3 id="totalSalidas">0</h3>
+            <p>Unidades de salida</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="form-grid filtros-kardex">
+          <div class="campo">
+            <label>Producto</label>
+            <select id="filtroProducto">
+              <option value="">Todos los productos</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Lote</label>
+            <select id="filtroLote">
+              <option value="">Todos los lotes</option>
+            </select>
+          </div>
+
+          <div class="campo campo-completo">
+            <label>Buscar</label>
+            <input type="text" id="inputBuscar" placeholder="Buscar por producto, lote, documento, tipo o usuario...">
+          </div>
+        </div>
+
+        <div class="acciones acciones-kardex">
+          <button class="btn" id="btnFiltrar">
+            <i class="fa-solid fa-filter"></i>
+            Filtrar
+          </button>
+
+          <button class="btn secundario" id="btnLimpiar">
+            Limpiar
+          </button>
+        </div>
+
+        <div class="tabla-contenedor">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Producto</th>
+                <th>Lote</th>
+                <th>Movimiento</th>
+                <th>Documento</th>
+                <th>Entrada</th>
+                <th>Salida</th>
+                <th>Stock ant.</th>
+                <th>Stock nuevo</th>
+                <th>Usuario</th>
+              </tr>
+            </thead>
+
+            <tbody id="tablaKardex">
+              <tr>
+                <td colspan="10">Cargando movimientos...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script src="js/auth.js"></script>
+  <script src="js/kardex.js"></script>
+</body>
+</html>

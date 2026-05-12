@@ -520,6 +520,50 @@ td {
   font-weight: bold;
 }
 
+.tarjetas-kardex {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.filtros-kardex {
+  margin-bottom: 18px;
+}
+
+.acciones-kardex {
+  margin-bottom: 20px;
+}
+
+.badge-movimiento {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.badge-movimiento.entrada {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-movimiento.salida {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.badge-movimiento.ajuste {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+@media (max-width: 900px) {
+  .tarjetas-kardex {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chatbot-panel {
   max-width: 900px;
 }

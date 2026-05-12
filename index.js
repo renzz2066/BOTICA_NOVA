@@ -225,6 +225,139 @@ async function asegurarUsuariosIniciales() {
   await asegurarUsuarioInicial("cajero", "123456", "CAJERO", "Cajero", "Ventas", "22222222");
 }
 
+const NOMBRES_TIPO_MOVIMIENTO = {
+  ENTRADA: "Entrada",
+  SALIDA: "Salida",
+  AJUSTE: "Ajuste",
+};
+
+const NOMBRES_TIPO_DOCUMENTO = {
+  LOTE: "Registro de lote",
+  VENTA: "Venta",
+  AJUSTE: "Ajuste de stock",
+};
+
+async function obtenerTipoMovimientoId(connection, codigo) {
+  const [rows] = await connection.query(
+    `
+    SELECT IdTipoMovimiento
+    FROM TM_TipoMovimiento
+    WHERE Codigo = ?
+    LIMIT 1
+    `,
+    [codigo]
+  );
+
+  if (rows.length > 0) {
+    return rows[0].IdTipoMovimiento;
+  }
+
+  const [result] = await connection.query(
+    `
+    INSERT INTO TM_TipoMovimiento (Codigo, Nombre)
+    VALUES (?, ?)
+    `,
+    [codigo, NOMBRES_TIPO_MOVIMIENTO[codigo] || codigo]
+  );
+
+  return result.insertId;
+}
+
+async function obtenerTipoDocumentoId(connection, codigo) {
+  const [rows] = await connection.query(
+    `
+    SELECT IdTipoDocumento
+    FROM TD_TipoDocumento
+    WHERE Codigo = ?
+    LIMIT 1
+    `,
+    [codigo]
+  );
+
+  if (rows.length > 0) {
+    return rows[0].IdTipoDocumento;
+  }
+
+  const [result] = await connection.query(
+    `
+    INSERT INTO TD_TipoDocumento (Codigo, Nombre)
+    VALUES (?, ?)
+    `,
+    [codigo, NOMBRES_TIPO_DOCUMENTO[codigo] || codigo]
+  );
+
+  return result.insertId;
+}
+
+async function registrarMovimientoInventario(connection, movimiento) {
+  const cantidadEntrada = Number(movimiento.cantidadEntrada || 0);
+  const cantidadSalida = Number(movimiento.cantidadSalida || 0);
+  const costoUnitario = movimiento.costoUnitario === undefined || movimiento.costoUnitario === null
+    ? null
+    : Number(movimiento.costoUnitario);
+  const cantidadMovimiento = cantidadEntrada > 0 ? cantidadEntrada : cantidadSalida;
+  const valorMovimiento = costoUnitario === null ? null : costoUnitario * cantidadMovimiento;
+  const idTipoMovimiento = await obtenerTipoMovimientoId(connection, movimiento.tipoMovimiento);
+  const idTipoDocumento = await obtenerTipoDocumentoId(connection, movimiento.tipoDocumento);
+
+  await connection.query(
+    `
+    INSERT INTO MI_MovimientoInventario
+    (
+      IdLote, IdUsuario, IdTipoMovimiento, IdTipoDocumento,
+      NumeroDocumento, TablaReferencia, IdReferencia,
+      CantidadEntrada, CantidadSalida, StockAnterior, StockNuevo,
+      CostoUnitario, ValorMovimiento, MetodoCosto, Motivo
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      movimiento.idLote,
+      movimiento.idUsuario || null,
+      idTipoMovimiento,
+      idTipoDocumento,
+      movimiento.numeroDocumento || null,
+      movimiento.tablaReferencia || null,
+      movimiento.idReferencia || null,
+      cantidadEntrada,
+      cantidadSalida,
+      movimiento.stockAnterior,
+      movimiento.stockNuevo,
+      costoUnitario,
+      valorMovimiento,
+      movimiento.metodoCosto || "PROMEDIO",
+      movimiento.motivo || null,
+    ]
+  );
+}
+
+async function asegurarCatalogosInventario() {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    await obtenerTipoMovimientoId(connection, "ENTRADA");
+    await obtenerTipoMovimientoId(connection, "SALIDA");
+    await obtenerTipoMovimientoId(connection, "AJUSTE");
+    await obtenerTipoDocumentoId(connection, "LOTE");
+    await obtenerTipoDocumentoId(connection, "VENTA");
+    await obtenerTipoDocumentoId(connection, "AJUSTE");
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function asegurarDatosIniciales() {
+  await asegurarUsuariosIniciales();
+  await asegurarCatalogosInventario();
+}
+
 app.use(cargarSesion);
 
 app.get("/", (req, res) => {
@@ -248,6 +381,7 @@ const paginasProtegidas = [
   { ruta: "/proveedores.html", archivo: "proveedores.html", roles: ["ADMIN"] },
   { ruta: "/productos.html", archivo: "productos.html", roles: ["ADMIN"] },
   { ruta: "/lotes.html", archivo: "lotes.html", roles: ["ADMIN"] },
+  { ruta: "/kardex.html", archivo: "kardex.html", roles: ["ADMIN"] },
   { ruta: "/ventas.html", archivo: "ventas.html", roles: ["ADMIN", "CAJERO"] },
   { ruta: "/alertas.html", archivo: "alertas.html", roles: ["ADMIN", "CAJERO"] },
   { ruta: "/chatbot.html", archivo: "chatbot.html", roles: ["ADMIN", "CAJERO"] },
@@ -1010,6 +1144,10 @@ app.post("/api/lotes", async (req, res) => {
     stockActual,
     usuarioRegistro,
   } = req.body;
+  const stockInicial = parseInt(stockActual);
+  const costoLote = costoCompraLote === undefined || costoCompraLote === null || costoCompraLote === ""
+    ? null
+    : parseFloat(costoCompraLote);
 
   if (!idItem || !numeroLote || stockActual === undefined) {
     return res.status(400).json({
@@ -1017,8 +1155,18 @@ app.post("/api/lotes", async (req, res) => {
     });
   }
 
+  if (Number.isNaN(stockInicial) || stockInicial < 0) {
+    return res.status(400).json({
+      error: "El stock actual debe ser 0 o mayor",
+    });
+  }
+
+  const connection = await pool.getConnection();
+
   try {
-    const [result] = await pool.query(
+    await connection.beginTransaction();
+
+    const [result] = await connection.query(
       `
       INSERT INTO LT_Lote
       (
@@ -1030,21 +1178,43 @@ app.post("/api/lotes", async (req, res) => {
       [
         idItem,
         numeroLote,
-        fechaVencimiento,
-        fechaIngreso,
-        costoCompraLote,
-        stockActual,
-        usuarioRegistro || "admin",
+        fechaVencimiento || null,
+        fechaIngreso || null,
+        costoLote,
+        stockInicial,
+        usuarioRegistro || req.usuario.username,
       ]
     );
+
+    if (stockInicial > 0) {
+      await registrarMovimientoInventario(connection, {
+        idLote: result.insertId,
+        idUsuario: req.usuario.idUsuario,
+        tipoMovimiento: "ENTRADA",
+        tipoDocumento: "LOTE",
+        numeroDocumento: numeroLote,
+        tablaReferencia: "LT_Lote",
+        idReferencia: result.insertId,
+        cantidadEntrada: stockInicial,
+        stockAnterior: 0,
+        stockNuevo: stockInicial,
+        costoUnitario: costoLote,
+        motivo: "Registro inicial de lote",
+      });
+    }
+
+    await connection.commit();
 
     res.status(201).json({
       mensaje: "Lote registrado correctamente",
       id: result.insertId,
     });
   } catch (error) {
+    await connection.rollback();
     console.error("Error al registrar lote:", error);
     res.status(500).json({ error: "Error al registrar lote" });
+  } finally {
+    connection.release();
   }
 });
 
@@ -1084,6 +1254,10 @@ app.put("/api/lotes/:id", async (req, res) => {
     stockActual,
     usuarioRegistro,
   } = req.body;
+  const stockNuevo = parseInt(stockActual);
+  const costoLote = costoCompraLote === undefined || costoCompraLote === null || costoCompraLote === ""
+    ? null
+    : parseFloat(costoCompraLote);
 
   if (!idItem || !numeroLote || stockActual === undefined) {
     return res.status(400).json({
@@ -1091,14 +1265,35 @@ app.put("/api/lotes/:id", async (req, res) => {
     });
   }
 
-  if (parseInt(stockActual) < 0) {
+  if (Number.isNaN(stockNuevo) || stockNuevo < 0) {
     return res.status(400).json({
       error: "El stock actual no puede ser negativo",
     });
   }
 
+  const connection = await pool.getConnection();
+
   try {
-    const [result] = await pool.query(
+    await connection.beginTransaction();
+
+    const [lotesActuales] = await connection.query(
+      `
+      SELECT StockActual
+      FROM LT_Lote
+      WHERE IdLote = ?
+      FOR UPDATE
+      `,
+      [id]
+    );
+
+    if (lotesActuales.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Lote no encontrado" });
+    }
+
+    const stockAnterior = Number(lotesActuales[0].StockActual);
+
+    const [result] = await connection.query(
       `
       UPDATE LT_Lote
       SET
@@ -1116,21 +1311,42 @@ app.put("/api/lotes/:id", async (req, res) => {
         numeroLote,
         fechaVencimiento || null,
         fechaIngreso || null,
-        costoCompraLote || null,
-        stockActual,
-        usuarioRegistro || "admin",
+        costoLote,
+        stockNuevo,
+        usuarioRegistro || req.usuario.username,
         id,
       ]
     );
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: "Lote no encontrado" });
+    const diferencia = stockNuevo - stockAnterior;
+
+    if (diferencia !== 0) {
+      await registrarMovimientoInventario(connection, {
+        idLote: id,
+        idUsuario: req.usuario.idUsuario,
+        tipoMovimiento: "AJUSTE",
+        tipoDocumento: "AJUSTE",
+        numeroDocumento: `AJUSTE-${id}`,
+        tablaReferencia: "LT_Lote",
+        idReferencia: id,
+        cantidadEntrada: diferencia > 0 ? diferencia : 0,
+        cantidadSalida: diferencia < 0 ? Math.abs(diferencia) : 0,
+        stockAnterior,
+        stockNuevo,
+        costoUnitario: costoLote,
+        motivo: "Ajuste manual de stock de lote",
+      });
     }
+
+    await connection.commit();
 
     res.json({ mensaje: "Lote actualizado correctamente" });
   } catch (error) {
+    await connection.rollback();
     console.error("Error al actualizar lote:", error);
     res.status(500).json({ error: "Error al actualizar lote" });
+  } finally {
+    connection.release();
   }
 });
 
@@ -1371,30 +1587,56 @@ app.post("/api/ventas", async (req, res) => {
 
     const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
     const idUsuario = req.usuario.idUsuario;
+    const numeroVenta = `V${Date.now().toString().slice(-9)}`;
+    const lotesBloqueados = new Map();
 
     let total = 0;
 
     for (const detalle of detalles) {
-      const [lotes] = await connection.query(
-        `
-        SELECT StockActual
-        FROM LT_Lote
-        WHERE IdLote = ?
-        FOR UPDATE
-        `,
-        [detalle.idLote]
-      );
+      const idLoteDetalle = parseInt(detalle.idLote);
+      const cantidadDetalle = parseInt(detalle.cantidad);
+      const precioUnitario = parseFloat(detalle.precioUnitario);
+      const descuento = detalle.descuento ? parseFloat(detalle.descuento) : 0;
 
-      if (lotes.length === 0) {
-        throw new Error("Uno de los lotes no existe");
+      if (!idLoteDetalle || Number.isNaN(cantidadDetalle) || cantidadDetalle <= 0) {
+        throw new Error("La cantidad de venta debe ser mayor a 0");
       }
 
-      if (lotes[0].StockActual < detalle.cantidad) {
+      if (Number.isNaN(precioUnitario) || precioUnitario <= 0) {
+        throw new Error("El precio unitario debe ser mayor a 0");
+      }
+
+      if (!lotesBloqueados.has(idLoteDetalle)) {
+        const [lotes] = await connection.query(
+          `
+          SELECT StockActual, CostoCompraLote
+          FROM LT_Lote
+          WHERE IdLote = ?
+          FOR UPDATE
+          `,
+          [idLoteDetalle]
+        );
+
+        if (lotes.length === 0) {
+          throw new Error("Uno de los lotes no existe");
+        }
+
+        lotesBloqueados.set(idLoteDetalle, {
+          stockAnterior: Number(lotes[0].StockActual),
+          costoUnitario: lotes[0].CostoCompraLote,
+          cantidadTotal: 0,
+          cantidadProcesada: 0,
+        });
+      }
+
+      const loteBloqueado = lotesBloqueados.get(idLoteDetalle);
+      loteBloqueado.cantidadTotal += cantidadDetalle;
+
+      if (loteBloqueado.stockAnterior < loteBloqueado.cantidadTotal) {
         throw new Error("Stock insuficiente para uno de los productos");
       }
 
-      const descuento = detalle.descuento || 0;
-      const subtotalDetalle = detalle.cantidad * detalle.precioUnitario - descuento;
+      const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
 
       total += subtotalDetalle;
     }
@@ -1413,7 +1655,7 @@ app.post("/api/ventas", async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PEN', ?)
       `,
       [
-        `V${Date.now().toString().slice(-9)}`,
+        numeroVenta,
         idCliente,
         idUsuario,
         idEstadoVenta,
@@ -1430,8 +1672,14 @@ app.post("/api/ventas", async (req, res) => {
     const idVenta = ventaResult.insertId;
 
     for (const detalle of detalles) {
-      const descuento = detalle.descuento || 0;
-      const subtotalDetalle = detalle.cantidad * detalle.precioUnitario - descuento;
+      const idLoteDetalle = parseInt(detalle.idLote);
+      const cantidadDetalle = parseInt(detalle.cantidad);
+      const precioUnitario = parseFloat(detalle.precioUnitario);
+      const descuento = detalle.descuento ? parseFloat(detalle.descuento) : 0;
+      const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
+      const loteBloqueado = lotesBloqueados.get(idLoteDetalle);
+      const stockAnteriorMovimiento = loteBloqueado.stockAnterior - loteBloqueado.cantidadProcesada;
+      const stockNuevoMovimiento = stockAnteriorMovimiento - cantidadDetalle;
 
       await connection.query(
         `
@@ -1441,9 +1689,9 @@ app.post("/api/ventas", async (req, res) => {
         `,
         [
           idVenta,
-          detalle.idLote,
-          detalle.cantidad,
-          detalle.precioUnitario,
+          idLoteDetalle,
+          cantidadDetalle,
+          precioUnitario,
           descuento,
           subtotalDetalle,
         ]
@@ -1455,8 +1703,25 @@ app.post("/api/ventas", async (req, res) => {
         SET StockActual = StockActual - ?
         WHERE IdLote = ?
         `,
-        [detalle.cantidad, detalle.idLote]
+        [cantidadDetalle, idLoteDetalle]
       );
+
+      await registrarMovimientoInventario(connection, {
+        idLote: idLoteDetalle,
+        idUsuario,
+        tipoMovimiento: "SALIDA",
+        tipoDocumento: "VENTA",
+        numeroDocumento: numeroComprobante || numeroVenta,
+        tablaReferencia: "VE_Venta",
+        idReferencia: idVenta,
+        cantidadSalida: cantidadDetalle,
+        stockAnterior: stockAnteriorMovimiento,
+        stockNuevo: stockNuevoMovimiento,
+        costoUnitario: loteBloqueado.costoUnitario,
+        motivo: "Salida por venta",
+      });
+
+      loteBloqueado.cantidadProcesada += cantidadDetalle;
     }
 
     await connection.commit();
@@ -1472,6 +1737,67 @@ app.post("/api/ventas", async (req, res) => {
     res.status(500).json({ error: error.message || "Error al registrar venta" });
   } finally {
     connection.release();
+  }
+});
+
+/* =========================
+   KARDEX / MOVIMIENTOS DE INVENTARIO
+========================= */
+
+app.get("/api/kardex", async (req, res) => {
+  const { idLote, idItem } = req.query;
+  const condiciones = [];
+  const parametros = [];
+
+  if (idLote) {
+    condiciones.push("m.IdLote = ?");
+    parametros.push(parseInt(idLote));
+  }
+
+  if (idItem) {
+    condiciones.push("l.IdItem = ?");
+    parametros.push(parseInt(idItem));
+  }
+
+  const where = condiciones.length > 0 ? `WHERE ${condiciones.join(" AND ")}` : "";
+
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        m.IdMovimiento,
+        m.FechaMovimiento,
+        i.Nombre AS Producto,
+        l.NumeroLote,
+        tm.Codigo AS CodigoMovimiento,
+        tm.Nombre AS TipoMovimiento,
+        td.Nombre AS TipoDocumento,
+        m.NumeroDocumento,
+        m.CantidadEntrada,
+        m.CantidadSalida,
+        m.StockAnterior,
+        m.StockNuevo,
+        m.CostoUnitario,
+        m.ValorMovimiento,
+        m.Motivo,
+        u.Username AS Usuario
+      FROM MI_MovimientoInventario m
+      INNER JOIN LT_Lote l ON m.IdLote = l.IdLote
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      INNER JOIN TM_TipoMovimiento tm ON m.IdTipoMovimiento = tm.IdTipoMovimiento
+      INNER JOIN TD_TipoDocumento td ON m.IdTipoDocumento = td.IdTipoDocumento
+      LEFT JOIN US_Usuario u ON m.IdUsuario = u.IdUsuario
+      ${where}
+      ORDER BY m.FechaMovimiento DESC, m.IdMovimiento DESC
+      LIMIT 300
+      `,
+      parametros
+    );
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Error al listar kardex:", error);
+    res.status(500).json({ error: "Error al listar kardex" });
   }
 });
 
@@ -1540,9 +1866,9 @@ app.post("/api/chatbot", async (req, res) => {
   }
 });
 
-asegurarUsuariosIniciales()
+asegurarDatosIniciales()
   .catch((error) => {
-    console.error("No se pudieron asegurar los usuarios iniciales:", error.message);
+    console.error("No se pudieron asegurar los datos iniciales:", error.message);
   })
   .finally(() => {
     app.listen(PORT, () => {
