@@ -1838,6 +1838,7 @@ app.get("/api/lotes-disponibles", async (req, res) => {
         UnidadesVenta: agregarUnidadesVentaAProducto(producto, unidadesPorItem).UnidadesVenta,
       };
     });
+    
 
     res.json(lotes);
   } catch (error) {

@@ -308,12 +308,12 @@ function obtenerLoteSeleccionado() {
 }
 
 function cargarUnidadesVenta(lote) {
-  const unidades = lote.UnidadesVenta || [];
+  const unidades = obtenerUnidadesVentaLote(lote);
 
   idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
 
   unidades.forEach((unidad, index) => {
-    const id = unidad.IdUnidadVenta || `default-${index}`;
+    const id = obtenerValorUnidadVenta(unidad, index);
     idUnidadVenta.innerHTML += `
       <option value="${id}" data-index="${index}">
         ${unidad.Nombre} x ${unidad.FactorConversion} ${lote.UnidadMinima || "UND"}
@@ -323,10 +323,10 @@ function cargarUnidadesVenta(lote) {
 
   if (unidades.length > 0) {
     const primeraUnidad = unidades[0];
-    idUnidadVenta.value = primeraUnidad.IdUnidadVenta || "default-0";
+    idUnidadVenta.value = obtenerValorUnidadVenta(primeraUnidad, 0);
     precioUnitario.value = Number(primeraUnidad.PrecioVenta).toFixed(2);
   } else {
-    precioUnitario.value = Number(lote.PrecioVenta).toFixed(2);
+    precioUnitario.value = "";
   }
 }
 
@@ -344,7 +344,34 @@ function obtenerUnidadSeleccionada() {
     return null;
   }
 
-  return lote.UnidadesVenta[parseInt(index)];
+  return obtenerUnidadesVentaLote(lote)[parseInt(index)];
+}
+
+function obtenerUnidadesVentaLote(lote) {
+  const unidades = Array.isArray(lote?.UnidadesVenta) ? lote.UnidadesVenta : [];
+
+  if (unidades.length > 0) {
+    return unidades;
+  }
+
+  if (!lote) {
+    return [];
+  }
+
+  return [
+    {
+      IdUnidadVenta: null,
+      Nombre: lote.UnidadMinima || "UND",
+      Abreviatura: lote.UnidadMinima || "UND",
+      FactorConversion: 1,
+      PrecioVenta: Number(lote.PrecioVenta || 0),
+      EsUnidadMinima: "S",
+    },
+  ];
+}
+
+function obtenerValorUnidadVenta(unidad, index) {
+  return unidad.IdUnidadVenta ?? `default-${index}`;
 }
 
 function formatearStockMinimo(lote) {
