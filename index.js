@@ -307,9 +307,9 @@ async function registrarMovimientoInventario(connection, movimiento) {
       IdLote, IdUsuario, IdTipoMovimiento, IdTipoDocumento,
       NumeroDocumento, TablaReferencia, IdReferencia,
       CantidadEntrada, CantidadSalida, StockAnterior, StockNuevo,
-      CostoUnitario, ValorMovimiento, MetodoCosto, Motivo
+      CostoUnitario, ValorMovimiento, MetodoCosto, Motivo, FechaMovimiento
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
     `,
     [
       movimiento.idLote,
@@ -327,6 +327,7 @@ async function registrarMovimientoInventario(connection, movimiento) {
       valorMovimiento,
       movimiento.metodoCosto || "PROMEDIO",
       movimiento.motivo || null,
+      movimiento.fechaMovimiento || null,
     ]
   );
 }
@@ -447,7 +448,7 @@ async function asegurarEsquemaUnidadesVenta() {
 
     await connection.query(`
       UPDATE DV_DetalleVenta
-      SET CantidadUnidadesMinimas = Cantidad
+      SET CantidadUnidadesMinimas = Cantidad * FactorConversion
       WHERE CantidadUnidadesMinimas IS NULL OR CantidadUnidadesMinimas = 0
     `);
 
@@ -681,10 +682,185 @@ async function obtenerUnidadVentaParaDetalle(connection, idItem, idUnidadVenta, 
   };
 }
 
+async function asegurarKardexHistorico() {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    await connection.query(`
+      UPDATE DV_DetalleVenta
+      SET FactorConversion = 1
+      WHERE FactorConversion IS NULL OR FactorConversion <= 0
+    `);
+
+    await connection.query(`
+      UPDATE DV_DetalleVenta
+      SET CantidadUnidadesMinimas = Cantidad * FactorConversion
+      WHERE CantidadUnidadesMinimas IS NULL OR CantidadUnidadesMinimas = 0
+    `);
+
+    const [lotes] = await connection.query(`
+      SELECT
+        l.IdLote,
+        l.NumeroLote,
+        l.FechaIngreso,
+        l.FechaRegistro,
+        l.StockActual,
+        l.CostoCompraLote,
+        COALESCE(vendidos.CantidadVendida, 0) AS CantidadVendida,
+        (
+          SELECT m.StockAnterior
+          FROM MI_MovimientoInventario m
+          WHERE m.IdLote = l.IdLote
+          ORDER BY m.FechaMovimiento ASC, m.IdMovimiento ASC
+          LIMIT 1
+        ) AS PrimerStockAnterior,
+        EXISTS (
+          SELECT 1
+          FROM MI_MovimientoInventario m
+          INNER JOIN TM_TipoMovimiento tm ON m.IdTipoMovimiento = tm.IdTipoMovimiento
+          INNER JOIN TD_TipoDocumento td ON m.IdTipoDocumento = td.IdTipoDocumento
+          WHERE m.IdLote = l.IdLote
+            AND tm.Codigo = 'ENTRADA'
+            AND td.Codigo = 'LOTE'
+            AND m.TablaReferencia = 'LT_Lote'
+            AND m.IdReferencia = l.IdLote
+          LIMIT 1
+        ) AS TieneEntradaInicial
+      FROM LT_Lote l
+      LEFT JOIN (
+        SELECT
+          dv.IdLote,
+          SUM(dv.CantidadUnidadesMinimas) AS CantidadVendida
+        FROM DV_DetalleVenta dv
+        INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+        WHERE v.Estado = 'A'
+        GROUP BY dv.IdLote
+      ) vendidos ON vendidos.IdLote = l.IdLote
+    `);
+
+    const stockInicialPorLote = new Map();
+
+    for (const lote of lotes) {
+      const stockActual = Number(lote.StockActual || 0);
+      const cantidadVendida = Number(lote.CantidadVendida || 0);
+      const primerStockAnterior = lote.PrimerStockAnterior === null || lote.PrimerStockAnterior === undefined
+        ? null
+        : Number(lote.PrimerStockAnterior);
+      const stockInicial = primerStockAnterior !== null && primerStockAnterior > 0
+        ? primerStockAnterior
+        : stockActual + cantidadVendida;
+
+      stockInicialPorLote.set(lote.IdLote, stockInicial);
+
+      if (!lote.TieneEntradaInicial && stockInicial > 0) {
+        await registrarMovimientoInventario(connection, {
+          idLote: lote.IdLote,
+          tipoMovimiento: "ENTRADA",
+          tipoDocumento: "LOTE",
+          numeroDocumento: lote.NumeroLote,
+          tablaReferencia: "LT_Lote",
+          idReferencia: lote.IdLote,
+          cantidadEntrada: stockInicial,
+          stockAnterior: 0,
+          stockNuevo: stockInicial,
+          costoUnitario: lote.CostoCompraLote,
+          motivo: "Entrada inicial reconstruida para Kardex",
+          fechaMovimiento: lote.FechaIngreso || lote.FechaRegistro,
+        });
+      }
+    }
+
+    const [ventasPorLote] = await connection.query(`
+      SELECT
+        dv.IdLote,
+        v.IdVenta,
+        v.NumeroVenta,
+        v.NumeroComprobante,
+        v.FechaVenta,
+        v.IdUsuario,
+        SUM(dv.CantidadUnidadesMinimas) AS CantidadSalida,
+        GROUP_CONCAT(
+          CONCAT(
+            dv.Cantidad,
+            ' ',
+            COALESCE(NULLIF(dv.UnidadVenta, ''), i.UnidadMedida, 'UND')
+          )
+          ORDER BY dv.IdDetalleVenta
+          SEPARATOR ', '
+        ) AS DetalleVenta,
+        EXISTS (
+          SELECT 1
+          FROM MI_MovimientoInventario m
+          INNER JOIN TD_TipoDocumento td ON m.IdTipoDocumento = td.IdTipoDocumento
+          WHERE m.IdLote = dv.IdLote
+            AND td.Codigo = 'VENTA'
+            AND m.TablaReferencia = 'VE_Venta'
+            AND m.IdReferencia = v.IdVenta
+          LIMIT 1
+        ) AS TieneMovimientoVenta
+      FROM DV_DetalleVenta dv
+      INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+      INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      WHERE v.Estado = 'A'
+      GROUP BY
+        dv.IdLote,
+        v.IdVenta,
+        v.NumeroVenta,
+        v.NumeroComprobante,
+        v.FechaVenta,
+        v.IdUsuario
+      ORDER BY dv.IdLote ASC, v.FechaVenta ASC, v.IdVenta ASC
+    `);
+
+    const stockReconstruidoPorLote = new Map(stockInicialPorLote);
+
+    for (const venta of ventasPorLote) {
+      const cantidadSalida = Number(venta.CantidadSalida || 0);
+
+      if (cantidadSalida <= 0) {
+        continue;
+      }
+
+      const stockAnterior = Number(stockReconstruidoPorLote.get(venta.IdLote) || 0);
+      const stockNuevo = stockAnterior - cantidadSalida;
+
+      if (!venta.TieneMovimientoVenta) {
+        await registrarMovimientoInventario(connection, {
+          idLote: venta.IdLote,
+          idUsuario: venta.IdUsuario,
+          tipoMovimiento: "SALIDA",
+          tipoDocumento: "VENTA",
+          numeroDocumento: venta.NumeroComprobante || venta.NumeroVenta,
+          tablaReferencia: "VE_Venta",
+          idReferencia: venta.IdVenta,
+          cantidadSalida,
+          stockAnterior,
+          stockNuevo,
+          motivo: `Salida por venta reconstruida (${venta.DetalleVenta})`,
+          fechaMovimiento: venta.FechaVenta,
+        });
+      }
+
+      stockReconstruidoPorLote.set(venta.IdLote, stockNuevo);
+    }
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 async function asegurarDatosIniciales() {
   await asegurarEsquemaUnidadesVenta();
   await asegurarUsuariosIniciales();
   await asegurarCatalogosInventario();
+  await asegurarKardexHistorico();
 }
 
 app.use(cargarSesion);
@@ -1772,20 +1948,30 @@ app.get("/api/alertas", async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT 
-        l.IdLote,
+        i.IdItem,
         i.Nombre AS Producto,
-        l.NumeroLote,
-        l.StockActual,
+        COALESCE(
+          GROUP_CONCAT(l.NumeroLote ORDER BY l.NumeroLote SEPARATOR ', '),
+          'Sin lote activo'
+        ) AS NumeroLote,
+        COALESCE(SUM(l.StockActual), 0) AS StockActual,
         i.StockMinimo,
         i.UnidadMedida AS UnidadMinima,
         pv.RazonSocial AS Proveedor
-      FROM LT_Lote l
-      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
-      LEFT JOIN PV_Proveedor pv ON i.IdProveedor = pv.IdProveedor
-      WHERE l.StockActual <= i.StockMinimo
+      FROM IT_Item i
+      LEFT JOIN LT_Lote l ON i.IdItem = l.IdItem
         AND l.Estado = 'A'
-        AND i.Estado = 'A'
-      ORDER BY l.StockActual ASC
+      LEFT JOIN PV_Proveedor pv ON i.IdProveedor = pv.IdProveedor
+      WHERE i.Estado = 'A'
+        AND i.StockMinimo > 0
+      GROUP BY
+        i.IdItem,
+        i.Nombre,
+        i.StockMinimo,
+        i.UnidadMedida,
+        pv.RazonSocial
+      HAVING StockActual <= i.StockMinimo
+      ORDER BY StockActual ASC, i.Nombre ASC
     `);
 
     res.json(rows);

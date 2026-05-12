@@ -20,9 +20,9 @@ inputBuscar.addEventListener("input", () => {
 
   const filtradas = alertas.filter((alerta) => {
     return (
-      alerta.Producto.toLowerCase().includes(texto) ||
-      alerta.NumeroLote.toLowerCase().includes(texto) ||
-      alerta.Proveedor?.toLowerCase().includes(texto)
+      String(alerta.Producto || "").toLowerCase().includes(texto) ||
+      String(alerta.NumeroLote || "").toLowerCase().includes(texto) ||
+      String(alerta.Proveedor || "").toLowerCase().includes(texto)
     );
   });
 
@@ -32,7 +32,13 @@ inputBuscar.addEventListener("input", () => {
 async function cargarAlertas() {
   try {
     const respuesta = await fetch(API_ALERTAS);
-    alertas = await respuesta.json();
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(data.error || "Error al cargar alertas");
+    }
+
+    alertas = Array.isArray(data) ? data : [];
 
     totalAlertas.textContent = alertas.length;
     mostrarAlertas(alertas);
@@ -59,20 +65,32 @@ function mostrarAlertas(lista) {
 
   tablaAlertas.innerHTML = lista
     .map((alerta) => {
+      const stockActual = Number(alerta.StockActual || 0);
+      const estado = stockActual <= 0 ? "Sin stock" : "Bajo stock";
+
       return `
         <tr>
-          <td>${alerta.Producto}</td>
-          <td>${alerta.NumeroLote}</td>
-          <td>${alerta.StockActual} ${alerta.UnidadMinima || "UND"}</td>
-          <td>${alerta.StockMinimo} ${alerta.UnidadMinima || "UND"}</td>
-          <td>${alerta.Proveedor || "-"}</td>
+          <td>${escaparHtml(alerta.Producto)}</td>
+          <td>${escaparHtml(alerta.NumeroLote || "Sin lote activo")}</td>
+          <td>${stockActual} ${escaparHtml(alerta.UnidadMinima || "UND")}</td>
+          <td>${Number(alerta.StockMinimo || 0)} ${escaparHtml(alerta.UnidadMinima || "UND")}</td>
+          <td>${escaparHtml(alerta.Proveedor || "-")}</td>
           <td>
             <span class="badge-alerta">
-              Bajo stock
+              ${estado}
             </span>
           </td>
         </tr>
       `;
     })
     .join("");
+}
+
+function escaparHtml(valor) {
+  return String(valor ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }

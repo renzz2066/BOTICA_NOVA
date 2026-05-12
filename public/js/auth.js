@@ -1,4 +1,4 @@
-const LINKS_SOLO_ADMIN = new Set(["proveedores.html", "productos.html", "lotes.html", "kardex.html"]);
+const LINKS_SOLO_ADMIN = new Set(["proveedores.html", "productos.html", "lotes.html"]);
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
