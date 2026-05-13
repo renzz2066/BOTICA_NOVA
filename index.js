@@ -128,6 +128,7 @@ function requireApiRole(req, res, next) {
   if (
     ruta.startsWith("/ventas") ||
     ruta.startsWith("/lotes-disponibles") ||
+    ruta.startsWith("/tipos-pago") ||
     ruta.startsWith("/alertas") ||
     ruta.startsWith("/chatbot")
   ) {
@@ -237,6 +238,67 @@ const NOMBRES_TIPO_DOCUMENTO = {
   AJUSTE: "Ajuste de stock",
 };
 
+const NOMBRES_ESTADO_VENTA = {
+  PEN: "Pendiente",
+  PAG: "Pagado",
+  ANU: "Anulado",
+};
+
+const SERIES_COMPROBANTE = {
+  BOLETA: "B001",
+  FACTURA: "F001",
+  TICKET: "T001",
+};
+
+function normalizarCodigoDocumento(texto) {
+  return String(texto || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizarTipoComprobante(tipoComprobante) {
+  const codigo = normalizarCodigoDocumento(tipoComprobante);
+
+  if (codigo === "FACTURA") {
+    return "Factura";
+  }
+
+  if (codigo === "TICKET") {
+    return "Ticket";
+  }
+
+  return "Boleta";
+}
+
+function obtenerSeriePorDefecto(tipoComprobante) {
+  return SERIES_COMPROBANTE[normalizarCodigoDocumento(tipoComprobante)] || "B001";
+}
+
+function formatearNumeroComprobante(numero) {
+  return String(numero).padStart(6, "0");
+}
+
+function construirDocumentoVenta(tipoComprobante, serie, numeroComprobante) {
+  return `${tipoComprobante} ${serie}-${numeroComprobante}`;
+}
+
+async function generarNumeroComprobanteVenta(connection, tipoComprobante, serie) {
+  const [rows] = await connection.query(
+    `
+    SELECT MAX(CAST(NumeroComprobante AS UNSIGNED)) AS UltimoNumero
+    FROM VE_Venta
+    WHERE TipoComprobante = ?
+      AND Serie = ?
+      AND NumeroComprobante REGEXP '^[0-9]+$'
+    `,
+    [tipoComprobante, serie]
+  );
+
+  return formatearNumeroComprobante(Number(rows[0]?.UltimoNumero || 0) + 1);
+}
+
 async function obtenerTipoMovimientoId(connection, codigo) {
   const [rows] = await connection.query(
     `
@@ -289,6 +351,80 @@ async function obtenerTipoDocumentoId(connection, codigo) {
   return result.insertId;
 }
 
+async function obtenerEstadoVentaId(connection, codigo) {
+  const codigoNormalizado = normalizarCodigoDocumento(codigo);
+  const [rows] = await connection.query(
+    `
+    SELECT IdEstadoVenta
+    FROM EV_EstadoVenta
+    WHERE Codigo = ?
+    LIMIT 1
+    `,
+    [codigoNormalizado]
+  );
+
+  if (rows.length > 0) {
+    return rows[0].IdEstadoVenta;
+  }
+
+  const [result] = await connection.query(
+    `
+    INSERT INTO EV_EstadoVenta (Codigo, Nombre)
+    VALUES (?, ?)
+    `,
+    [codigoNormalizado, NOMBRES_ESTADO_VENTA[codigoNormalizado] || codigoNormalizado]
+  );
+
+  return result.insertId;
+}
+
+async function obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago) {
+  if (idTipoPago) {
+    const [rows] = await connection.query(
+      `
+      SELECT IdTipoPago
+      FROM TP_TipoPago
+      WHERE IdTipoPago = ?
+        AND Estado = 'A'
+      LIMIT 1
+      `,
+      [idTipoPago]
+    );
+
+    if (rows.length > 0) {
+      return rows[0].IdTipoPago;
+    }
+  }
+
+  const codigo = normalizarCodigoDocumento(codigoTipoPago || "EFE");
+  const [rows] = await connection.query(
+    `
+    SELECT IdTipoPago
+    FROM TP_TipoPago
+    WHERE Codigo = ?
+      AND Estado = 'A'
+    LIMIT 1
+    `,
+    [codigo]
+  );
+
+  if (rows.length === 0) {
+    throw new Error("El tipo de pago seleccionado no existe");
+  }
+
+  return rows[0].IdTipoPago;
+}
+
+async function generarNumeroPago(connection) {
+  const [rows] = await connection.query(`
+    SELECT MAX(CAST(SUBSTRING(NumeroPago, 2) AS UNSIGNED)) AS UltimoNumero
+    FROM PG_Pago
+    WHERE NumeroPago REGEXP '^P[0-9]+$'
+  `);
+
+  return `P${String(Number(rows[0]?.UltimoNumero || 0) + 1).padStart(6, "0")}`;
+}
+
 async function registrarMovimientoInventario(connection, movimiento) {
   const cantidadEntrada = Number(movimiento.cantidadEntrada || 0);
   const cantidadSalida = Number(movimiento.cantidadSalida || 0);
@@ -299,6 +435,10 @@ async function registrarMovimientoInventario(connection, movimiento) {
   const valorMovimiento = costoUnitario === null ? null : costoUnitario * cantidadMovimiento;
   const idTipoMovimiento = await obtenerTipoMovimientoId(connection, movimiento.tipoMovimiento);
   const idTipoDocumento = await obtenerTipoDocumentoId(connection, movimiento.tipoDocumento);
+
+  if (cantidadEntrada <= 0 && cantidadSalida <= 0 && movimiento.tipoMovimiento !== "AJUSTE") {
+    throw new Error("El movimiento de inventario debe registrar entrada o salida");
+  }
 
   await connection.query(
     `
@@ -354,6 +494,81 @@ async function asegurarCatalogosInventario() {
   }
 }
 
+async function asegurarCatalogosBasicos() {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // Insertar categorías básicas
+    await connection.query(`
+      INSERT INTO CA_Categoria (Codigo, Nombre)
+      VALUES
+        ('MED', 'Medicamentos'),
+        ('DERM', 'Dermatológicos'),
+        ('ANA', 'Analgésicos'),
+        ('ATB', 'Antibióticos')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre), Estado = 'A'
+    `);
+
+    // Insertar marcas básicas
+    await connection.query(`
+      INSERT INTO MA_Marca (Codigo, Nombre)
+      VALUES
+        ('GEN', 'Genérico'),
+        ('BAY', 'Bayer'),
+        ('MK', 'MK'),
+        ('PFZ', 'Pfizer')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre), Estado = 'A'
+    `);
+
+    // Insertar presentaciones básicas
+    await connection.query(`
+      INSERT INTO PR_Presentacion (Codigo, Nombre)
+      VALUES
+        ('TAB', 'Tableta'),
+        ('CAP', 'Cápsula'),
+        ('JAR', 'Jarabe'),
+        ('CRE', 'Crema')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre), Estado = 'A'
+    `);
+
+    // Insertar tipos de pago
+    await connection.query(`
+      INSERT INTO TP_TipoPago (Codigo, Nombre)
+      VALUES
+        ('EFE', 'Efectivo'),
+        ('TDB', 'Tarjeta Débito'),
+        ('TCR', 'Tarjeta Crédito')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre), Estado = 'A'
+    `);
+
+    await connection.query(`
+      INSERT INTO TP_TipoPago (Codigo, Nombre)
+      VALUES
+        ('YAP', 'Yape'),
+        ('PLI', 'Plin')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre), Estado = 'A'
+    `);
+
+    await connection.query(`
+      INSERT INTO EV_EstadoVenta (Codigo, Nombre)
+      VALUES
+        ('PEN', 'Pendiente'),
+        ('PAG', 'Pagado'),
+        ('ANU', 'Anulado')
+      ON DUPLICATE KEY UPDATE Nombre = VALUES(Nombre)
+    `);
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 async function columnaExiste(connection, tabla, columna) {
   const [rows] = await connection.query(
     `
@@ -386,12 +601,83 @@ async function constraintExiste(connection, tabla, constraint) {
   return rows.length > 0;
 }
 
+async function foreignKeyEnColumnaExiste(connection, tabla, columna) {
+  const [rows] = await connection.query(
+    `
+    SELECT CONSTRAINT_NAME
+    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND COLUMN_NAME = ?
+      AND REFERENCED_TABLE_NAME IS NOT NULL
+    LIMIT 1
+    `,
+    [tabla, columna]
+  );
+
+  return rows.length > 0;
+}
+
+async function indiceUnicoConColumnasExiste(connection, tabla, columnas) {
+  const [rows] = await connection.query(
+    `
+    SELECT INDEX_NAME
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+      AND NON_UNIQUE = 0
+    GROUP BY INDEX_NAME
+    HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') = ?
+    LIMIT 1
+    `,
+    [tabla, columnas.join(",")]
+  );
+
+  return rows.length > 0;
+}
+
 async function agregarColumnaSiNoExiste(connection, tabla, columna, definicion) {
   if (await columnaExiste(connection, tabla, columna)) {
     return;
   }
 
   await connection.query(`ALTER TABLE ${tabla} ADD COLUMN ${definicion}`);
+}
+
+async function asegurarEsquemaBase() {
+  const connection = await pool.getConnection();
+
+  try {
+    if (await columnaExiste(connection, "PE_Persona", "Codigo")) {
+      await connection.query(`
+        ALTER TABLE PE_Persona
+        MODIFY COLUMN Codigo Varchar(10) NULL
+      `);
+    }
+
+    await agregarColumnaSiNoExiste(
+      connection,
+      "PE_Persona",
+      "Correo",
+      "Correo Varchar(100) NULL AFTER Telefono"
+    );
+
+    await agregarColumnaSiNoExiste(
+      connection,
+      "CL_Cliente",
+      "CodigoCliente",
+      "CodigoCliente Varchar(20) NULL UNIQUE AFTER IdPersona"
+    );
+
+    if (await columnaExiste(connection, "PV_Proveedor", "Codigo")) {
+      await connection.query(`
+        ALTER TABLE PV_Proveedor
+        MODIFY COLUMN Codigo Varchar(10) NULL
+      `);
+    }
+  } finally {
+    connection.release();
+  }
 }
 
 async function asegurarEsquemaUnidadesVenta() {
@@ -414,6 +700,44 @@ async function asegurarEsquemaUnidadesVenta() {
         CHECK (FactorConversion > 0)
       ) ENGINE = InnoDB
     `);
+
+    await agregarColumnaSiNoExiste(
+      connection,
+      "UV_UnidadVenta",
+      "Abreviatura",
+      "Abreviatura Varchar(20) NULL AFTER Nombre"
+    );
+
+    if (await columnaExiste(connection, "UV_UnidadVenta", "Codigo")) {
+      await connection.query(`
+        ALTER TABLE UV_UnidadVenta
+        MODIFY COLUMN Codigo Varchar(20) NULL
+      `);
+
+      await connection.query(`
+        UPDATE UV_UnidadVenta
+        SET Abreviatura = COALESCE(NULLIF(Abreviatura, ''), NULLIF(Codigo, ''), UPPER(LEFT(Nombre, 20)), 'UND')
+        WHERE Abreviatura IS NULL OR Abreviatura = ''
+      `);
+    } else {
+      await connection.query(`
+        UPDATE UV_UnidadVenta
+        SET Abreviatura = COALESCE(NULLIF(Abreviatura, ''), UPPER(LEFT(Nombre, 20)), 'UND')
+        WHERE Abreviatura IS NULL OR Abreviatura = ''
+      `);
+    }
+
+    await connection.query(`
+      ALTER TABLE UV_UnidadVenta
+      MODIFY COLUMN Abreviatura Varchar(20) NOT NULL
+    `);
+
+    if (!(await indiceUnicoConColumnasExiste(connection, "UV_UnidadVenta", ["IdItem", "Abreviatura"]))) {
+      await connection.query(`
+        CREATE UNIQUE INDEX UX_UV_Item_Abreviatura
+        ON UV_UnidadVenta (IdItem, Abreviatura)
+      `);
+    }
 
     await agregarColumnaSiNoExiste(
       connection,
@@ -452,7 +776,15 @@ async function asegurarEsquemaUnidadesVenta() {
       WHERE CantidadUnidadesMinimas IS NULL OR CantidadUnidadesMinimas = 0
     `);
 
-    if (!(await constraintExiste(connection, "DV_DetalleVenta", "FK_DV_UnidadVenta"))) {
+    await connection.query(`
+      ALTER TABLE DV_DetalleVenta
+      MODIFY COLUMN IdUnidadVenta Int NULL
+    `);
+
+    if (
+      !(await constraintExiste(connection, "DV_DetalleVenta", "FK_DV_UnidadVenta")) &&
+      !(await foreignKeyEnColumnaExiste(connection, "DV_DetalleVenta", "IdUnidadVenta"))
+    ) {
       await connection.query(`
         ALTER TABLE DV_DetalleVenta
         ADD CONSTRAINT FK_DV_UnidadVenta
@@ -735,7 +1067,9 @@ async function asegurarKardexHistorico() {
           SUM(dv.CantidadUnidadesMinimas) AS CantidadVendida
         FROM DV_DetalleVenta dv
         INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+        INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
         WHERE v.Estado = 'A'
+          AND ev.Codigo = 'PAG'
         GROUP BY dv.IdLote
       ) vendidos ON vendidos.IdLote = l.IdLote
     `);
@@ -802,9 +1136,11 @@ async function asegurarKardexHistorico() {
         ) AS TieneMovimientoVenta
       FROM DV_DetalleVenta dv
       INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+      INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
       INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
       INNER JOIN IT_Item i ON l.IdItem = i.IdItem
       WHERE v.Estado = 'A'
+        AND ev.Codigo = 'PAG'
       GROUP BY
         dv.IdLote,
         v.IdVenta,
@@ -830,7 +1166,7 @@ async function asegurarKardexHistorico() {
       if (!venta.TieneMovimientoVenta) {
         await registrarMovimientoInventario(connection, {
           idLote: venta.IdLote,
-          idUsuario: venta.IdUsuario,
+          idUsuario: null, // Para histórico
           tipoMovimiento: "SALIDA",
           tipoDocumento: "VENTA",
           numeroDocumento: venta.NumeroComprobante || venta.NumeroVenta,
@@ -857,9 +1193,25 @@ async function asegurarKardexHistorico() {
 }
 
 async function asegurarDatosIniciales() {
+  await asegurarEsquemaBase();
   await asegurarEsquemaUnidadesVenta();
   await asegurarUsuariosIniciales();
+  await asegurarCatalogosBasicos();
   await asegurarCatalogosInventario();
+
+  // Asegurar que IdUsuario en MI_MovimientoInventario sea NULLABLE
+  const connection = await pool.getConnection();
+  try {
+    await connection.query(`
+      ALTER TABLE MI_MovimientoInventario
+      MODIFY COLUMN IdUsuario Int NULL
+    `);
+  } catch (error) {
+    // Ignorar si ya es NULLABLE
+  } finally {
+    connection.release();
+  }
+
   await asegurarKardexHistorico();
 }
 
@@ -1106,6 +1458,22 @@ app.get("/api/presentaciones", async (req, res) => {
   }
 });
 
+app.get("/api/tipos-pago", async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT IdTipoPago, Codigo, Nombre
+      FROM TP_TipoPago
+      WHERE Estado = 'A'
+      ORDER BY IdTipoPago ASC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Error al listar tipos de pago:", error);
+    res.status(500).json({ error: "Error al listar tipos de pago" });
+  }
+});
+
 app.post("/api/presentaciones", async (req, res) => {
   const { codigo, nombre } = req.body;
 
@@ -1139,7 +1507,7 @@ app.post("/api/presentaciones", async (req, res) => {
 app.get("/api/proveedores", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         pv.IdProveedor,
         pe.IdPersona,
         pe.Nombres,
@@ -1147,7 +1515,7 @@ app.get("/api/proveedores", async (req, res) => {
         pe.TipoDocumento,
         pe.NumeroDocumento,
         pe.Telefono,
-        pe.Correo,
+        COALESCE(pe.Correo, '') AS Correo,
         pe.Direccion,
         pv.RazonSocial,
         pv.Ruc,
@@ -1171,7 +1539,7 @@ app.get("/api/proveedores/:id", async (req, res) => {
   try {
     const [rows] = await pool.query(
       `
-      SELECT 
+      SELECT
         pv.IdProveedor,
         pe.IdPersona,
         pe.Nombres,
@@ -1179,7 +1547,7 @@ app.get("/api/proveedores/:id", async (req, res) => {
         pe.TipoDocumento,
         pe.NumeroDocumento,
         pe.Telefono,
-        pe.Correo,
+        COALESCE(pe.Correo, '') AS Correo,
         pe.Direccion,
         pv.RazonSocial,
         pv.Ruc,
@@ -1235,11 +1603,11 @@ app.post("/api/proveedores", async (req, res) => {
       [
         nombres,
         apellidos,
-        tipoDocumento,
-        numeroDocumento,
-        telefono,
-        correo,
-        direccion,
+        tipoDocumento || null,
+        numeroDocumento || null,
+        telefono || null,
+        correo || null,
+        direccion || null,
       ]
     );
 
@@ -1252,6 +1620,15 @@ app.post("/api/proveedores", async (req, res) => {
       VALUES (?, ?, ?)
       `,
       [idPersona, razonSocial, ruc]
+    );
+
+    await connection.query(
+      `
+      UPDATE PV_Proveedor
+      SET Codigo = CONCAT('PRO', IdProveedor)
+      WHERE IdProveedor = ?
+      `,
+      [proveedorResult.insertId]
     );
 
     await connection.commit();
@@ -1309,7 +1686,7 @@ app.put("/api/proveedores/:id", async (req, res) => {
     await connection.query(
       `
       UPDATE PE_Persona
-      SET 
+      SET
         Nombres = ?,
         Apellidos = ?,
         TipoDocumento = ?,
@@ -1322,11 +1699,11 @@ app.put("/api/proveedores/:id", async (req, res) => {
       [
         nombres,
         apellidos,
-        tipoDocumento,
-        numeroDocumento,
-        telefono,
-        correo,
-        direccion,
+        tipoDocumento || null,
+        numeroDocumento || null,
+        telefono || null,
+        correo || null,
+        direccion || null,
         idPersona,
       ]
     );
@@ -1334,7 +1711,7 @@ app.put("/api/proveedores/:id", async (req, res) => {
     await connection.query(
       `
       UPDATE PV_Proveedor
-      SET 
+      SET
         RazonSocial = ?,
         Ruc = ?
       WHERE IdProveedor = ?
@@ -1385,7 +1762,7 @@ app.delete("/api/proveedores/:id", async (req, res) => {
 app.get("/api/productos", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         i.IdItem,
         i.Codigo,
         i.CodigoBarras,
@@ -1405,6 +1782,7 @@ app.get("/api/productos", async (req, res) => {
       INNER JOIN MA_Marca m ON i.IdMarca = m.IdMarca
       INNER JOIN PR_Presentacion pr ON i.IdPresentacion = pr.IdPresentacion
       LEFT JOIN PV_Proveedor pv ON i.IdProveedor = pv.IdProveedor
+        AND pv.Estado = 'A'
       WHERE i.Estado = 'A'
       ORDER BY i.IdItem DESC
     `);
@@ -1439,11 +1817,18 @@ app.post("/api/productos", async (req, res) => {
     unidadesVenta,
   } = req.body;
   const precioVentaNumero = parseFloat(precioVenta);
+  const precioCompraNumero = precioCompra === undefined || precioCompra === null || precioCompra === ""
+    ? null
+    : parseFloat(precioCompra);
 
   if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
+  }
+
+  if (precioCompraNumero !== null && (Number.isNaN(precioCompraNumero) || precioCompraNumero < 0)) {
+    return res.status(400).json({ error: "El precio de compra no puede ser negativo" });
   }
 
   const connection = await pool.getConnection();
@@ -1462,12 +1847,12 @@ app.post("/api/productos", async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        codigo,
-        codigoBarras,
+        codigo || null,
+        codigoBarras || null,
         nombre,
-        descripcion,
+        descripcion || null,
         precioVentaNumero,
-        precioCompra,
+        precioCompraNumero,
         idCategoria,
         idMarca,
         idPresentacion,
@@ -1545,11 +1930,18 @@ app.put("/api/productos/:id", async (req, res) => {
     unidadesVenta,
   } = req.body;
   const precioVentaNumero = parseFloat(precioVenta);
+  const precioCompraNumero = precioCompra === undefined || precioCompra === null || precioCompra === ""
+    ? null
+    : parseFloat(precioCompra);
 
   if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
+  }
+
+  if (precioCompraNumero !== null && (Number.isNaN(precioCompraNumero) || precioCompraNumero < 0)) {
+    return res.status(400).json({ error: "El precio de compra no puede ser negativo" });
   }
 
   const connection = await pool.getConnection();
@@ -1580,12 +1972,12 @@ app.put("/api/productos/:id", async (req, res) => {
       WHERE IdItem = ?
       `,
       [
-        codigo,
-        codigoBarras,
+        codigo || null,
+        codigoBarras || null,
         nombre,
-        descripcion,
+        descripcion || null,
         precioVentaNumero,
-        precioCompra,
+        precioCompraNumero,
         idCategoria,
         idMarca,
         idPresentacion,
@@ -1649,7 +2041,7 @@ app.delete("/api/productos/:id", async (req, res) => {
 app.get("/api/lotes", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         l.IdLote,
         l.IdItem,
         i.Nombre AS Producto,
@@ -1947,7 +2339,7 @@ app.delete("/api/lotes/:id", async (req, res) => {
 app.get("/api/alertas", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         i.IdItem,
         i.Nombre AS Producto,
         COALESCE(
@@ -1988,10 +2380,12 @@ app.get("/api/alertas", async (req, res) => {
 app.get("/api/lotes-disponibles", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         l.IdLote,
         l.NumeroLote,
-        l.StockActual,
+        l.StockActual AS StockFisico,
+        GREATEST(l.StockActual - COALESCE(reservado.StockReservado, 0), 0) AS StockActual,
+        COALESCE(reservado.StockReservado, 0) AS StockReservado,
         l.FechaVencimiento,
         i.IdItem,
         i.Nombre AS Producto,
@@ -2003,9 +2397,20 @@ app.get("/api/lotes-disponibles", async (req, res) => {
       INNER JOIN IT_Item i ON l.IdItem = i.IdItem
       INNER JOIN MA_Marca m ON i.IdMarca = m.IdMarca
       INNER JOIN PR_Presentacion pr ON i.IdPresentacion = pr.IdPresentacion
+      LEFT JOIN (
+        SELECT
+          dv.IdLote,
+          SUM(dv.CantidadUnidadesMinimas) AS StockReservado
+        FROM DV_DetalleVenta dv
+        INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+        INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+        WHERE v.Estado = 'A'
+          AND ev.Codigo = 'PEN'
+        GROUP BY dv.IdLote
+      ) reservado ON reservado.IdLote = l.IdLote
       WHERE l.Estado = 'A'
         AND i.Estado = 'A'
-        AND l.StockActual > 0
+        AND GREATEST(l.StockActual - COALESCE(reservado.StockReservado, 0), 0) > 0
       ORDER BY i.Nombre ASC
     `);
 
@@ -2024,7 +2429,7 @@ app.get("/api/lotes-disponibles", async (req, res) => {
         UnidadesVenta: agregarUnidadesVentaAProducto(producto, unidadesPorItem).UnidadesVenta,
       };
     });
-    
+
 
     res.json(lotes);
   } catch (error) {
@@ -2039,7 +2444,6 @@ app.get("/api/lotes-disponibles", async (req, res) => {
 
 async function obtenerDatosVentaBasicos(connection) {
   let idCliente;
-  let idEstadoVenta;
 
   const [clientes] = await connection.query(`
     SELECT IdCliente
@@ -2069,32 +2473,40 @@ async function obtenerDatosVentaBasicos(connection) {
     idCliente = cliente.insertId;
   }
 
-  const [estados] = await connection.query(`
-    SELECT IdEstadoVenta
-    FROM EV_EstadoVenta
-    WHERE Codigo = 'REG'
-    LIMIT 1
-  `);
-
-  if (estados.length > 0) {
-    idEstadoVenta = estados[0].IdEstadoVenta;
-  } else {
-    const [estado] = await connection.query(`
-      INSERT INTO EV_EstadoVenta
-      (Codigo, Nombre)
-      VALUES ('REG', 'Registrada')
-    `);
-
-    idEstadoVenta = estado.insertId;
-  }
+  const idEstadoVenta = await obtenerEstadoVentaId(connection, "PEN");
 
   return { idCliente, idEstadoVenta };
+}
+
+async function obtenerStockReservadoPendiente(connection, idLote, idVentaExcluir = null) {
+  const parametros = [idLote];
+  const excluir = idVentaExcluir ? "AND v.IdVenta <> ?" : "";
+
+  if (idVentaExcluir) {
+    parametros.push(idVentaExcluir);
+  }
+
+  const [rows] = await connection.query(
+    `
+    SELECT COALESCE(SUM(dv.CantidadUnidadesMinimas), 0) AS Reservado
+    FROM DV_DetalleVenta dv
+    INNER JOIN VE_Venta v ON dv.IdVenta = v.IdVenta
+    INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+    WHERE dv.IdLote = ?
+      AND v.Estado = 'A'
+      AND ev.Codigo = 'PEN'
+      ${excluir}
+    `,
+    parametros
+  );
+
+  return Number(rows[0]?.Reservado || 0);
 }
 
 app.get("/api/ventas", async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
+      SELECT
         v.IdVenta,
         v.NumeroVenta,
         v.FechaVenta,
@@ -2102,8 +2514,13 @@ app.get("/api/ventas", async (req, res) => {
         v.Igv,
         v.Total,
         v.TipoComprobante,
+        v.Serie,
         v.NumeroComprobante,
+        ev.Codigo AS CodigoEstadoVenta,
         ev.Nombre AS EstadoVenta,
+        pg.NumeroPago,
+        pg.EstadoPago,
+        tp.Nombre AS TipoPago,
         CONCAT(pc.Nombres, ' ', pc.Apellidos) AS Cliente,
         u.Username AS Usuario
       FROM VE_Venta v
@@ -2111,6 +2528,10 @@ app.get("/api/ventas", async (req, res) => {
       INNER JOIN PE_Persona pc ON c.IdPersona = pc.IdPersona
       INNER JOIN US_Usuario u ON v.IdUsuario = u.IdUsuario
       INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+      LEFT JOIN PG_Pago pg ON v.IdVenta = pg.IdVenta
+        AND pg.EstadoPago = 'PAGADO'
+      LEFT JOIN DP_DetallePago dp ON pg.IdPago = dp.IdPago
+      LEFT JOIN TP_TipoPago tp ON dp.IdTipoPago = tp.IdTipoPago
       WHERE v.Estado = 'A'
       ORDER BY v.IdVenta DESC
     `);
@@ -2141,7 +2562,7 @@ app.get("/api/ventas/:id", async (req, res) => {
 
     const [detalles] = await pool.query(
       `
-      SELECT 
+      SELECT
         dv.IdDetalleVenta,
         dv.IdLote,
         dv.IdUnidadVenta,
@@ -2188,6 +2609,12 @@ app.post("/api/ventas", async (req, res) => {
     const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
     const idUsuario = req.usuario.idUsuario;
     const numeroVenta = `V${Date.now().toString().slice(-9)}`;
+    const tipoComprobanteFinal = normalizarTipoComprobante(tipoComprobante);
+    const serieFinal = String(serie || obtenerSeriePorDefecto(tipoComprobanteFinal)).trim().toUpperCase();
+    const numeroComprobanteFinal = numeroComprobante
+      ? String(numeroComprobante).trim()
+      : await generarNumeroComprobanteVenta(connection, tipoComprobanteFinal, serieFinal);
+    const documentoVenta = construirDocumentoVenta(tipoComprobanteFinal, serieFinal, numeroComprobanteFinal);
     const lotesBloqueados = new Map();
     const detallesPreparados = [];
 
@@ -2226,8 +2653,11 @@ app.post("/api/ventas", async (req, res) => {
           throw new Error("Uno de los lotes no existe");
         }
 
+        const stockReservado = await obtenerStockReservadoPendiente(connection, idLoteDetalle);
+
         lotesBloqueados.set(idLoteDetalle, {
           stockAnterior: Number(lotes[0].StockActual),
+          stockReservado,
           costoUnitario: lotes[0].CostoCompraLote,
           idItem: lotes[0].IdItem,
           precioVenta: lotes[0].PrecioVenta,
@@ -2263,8 +2693,10 @@ app.post("/api/ventas", async (req, res) => {
 
       loteBloqueado.cantidadTotal += cantidadUnidadesMinimas;
 
-      if (loteBloqueado.stockAnterior < loteBloqueado.cantidadTotal) {
-        throw new Error("Stock insuficiente para uno de los productos");
+      const stockDisponible = loteBloqueado.stockAnterior - loteBloqueado.stockReservado;
+
+      if (stockDisponible < loteBloqueado.cantidadTotal) {
+        throw new Error("Stock disponible insuficiente para uno de los productos");
       }
 
       const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
@@ -2309,9 +2741,9 @@ app.post("/api/ventas", async (req, res) => {
         subtotal,
         igv,
         total,
-        tipoComprobante || "Boleta",
-        serie || "B001",
-        numeroComprobante || null,
+        tipoComprobanteFinal,
+        serieFinal,
+        numeroComprobanteFinal,
         observacion || "",
       ]
     );
@@ -2320,9 +2752,6 @@ app.post("/api/ventas", async (req, res) => {
 
     for (const detalle of detallesPreparados) {
       const idLoteDetalle = detalle.idLoteDetalle;
-      const loteBloqueado = lotesBloqueados.get(idLoteDetalle);
-      const stockAnteriorMovimiento = loteBloqueado.stockAnterior - loteBloqueado.cantidadProcesada;
-      const stockNuevoMovimiento = stockAnteriorMovimiento - detalle.cantidadUnidadesMinimas;
 
       await connection.query(
         `
@@ -2347,6 +2776,152 @@ app.post("/api/ventas", async (req, res) => {
           detalle.subtotalDetalle,
         ]
       );
+    }
+
+    await connection.commit();
+
+    res.status(201).json({
+      mensaje: "Pedido generado correctamente",
+      idVenta,
+      numeroVenta,
+      documento: documentoVenta,
+      tipoComprobante: tipoComprobanteFinal,
+      serie: serieFinal,
+      numeroComprobante: numeroComprobanteFinal,
+      total,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error al registrar venta:", error.message);
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "El numero de comprobante ya existe" });
+    }
+
+    res.status(500).json({ error: error.message || "Error al registrar venta" });
+  } finally {
+    connection.release();
+  }
+});
+
+app.post("/api/ventas/:id/pagar", async (req, res) => {
+  const idVenta = parseInt(req.params.id);
+  const { idTipoPago, codigoTipoPago, monto, referencia } = req.body;
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [ventas] = await connection.query(
+      `
+      SELECT
+        v.*,
+        ev.Codigo AS CodigoEstadoVenta
+      FROM VE_Venta v
+      INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+      WHERE v.IdVenta = ?
+        AND v.Estado = 'A'
+      FOR UPDATE
+      `,
+      [idVenta]
+    );
+
+    if (ventas.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Pedido no encontrado" });
+    }
+
+    const venta = ventas[0];
+
+    if (venta.CodigoEstadoVenta === "PAG") {
+      await connection.rollback();
+      return res.status(409).json({ error: "Este pedido ya fue pagado" });
+    }
+
+    if (venta.CodigoEstadoVenta === "ANU") {
+      await connection.rollback();
+      return res.status(409).json({ error: "No se puede pagar un pedido anulado" });
+    }
+
+    if (venta.CodigoEstadoVenta !== "PEN") {
+      await connection.rollback();
+      return res.status(409).json({ error: "Solo se pueden pagar pedidos pendientes" });
+    }
+
+    const [pagosExistentes] = await connection.query(
+      `
+      SELECT IdPago
+      FROM PG_Pago
+      WHERE IdVenta = ?
+        AND EstadoPago = 'PAGADO'
+      LIMIT 1
+      `,
+      [idVenta]
+    );
+
+    if (pagosExistentes.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: "Este pedido ya tiene un pago registrado" });
+    }
+
+    const montoTotal = Number(venta.Total || 0);
+    const montoRecibido = monto === undefined || monto === null || monto === ""
+      ? montoTotal
+      : Number(monto);
+
+    if (Number.isNaN(montoRecibido) || montoRecibido < montoTotal) {
+      await connection.rollback();
+      return res.status(400).json({ error: "El monto recibido no puede ser menor al total del pedido" });
+    }
+
+    const [detalles] = await connection.query(
+      `
+      SELECT
+        dv.IdDetalleVenta,
+        dv.IdLote,
+        dv.IdUnidadVenta,
+        dv.Cantidad,
+        dv.UnidadVenta,
+        dv.FactorConversion,
+        dv.CantidadUnidadesMinimas,
+        dv.PrecioUnitario,
+        dv.Subtotal,
+        l.StockActual,
+        l.CostoCompraLote
+      FROM DV_DetalleVenta dv
+      INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
+      WHERE dv.IdVenta = ?
+      ORDER BY dv.IdDetalleVenta ASC
+      FOR UPDATE
+      `,
+      [idVenta]
+    );
+
+    if (detalles.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "El pedido no tiene productos" });
+    }
+
+    const idEstadoPagado = await obtenerEstadoVentaId(connection, "PAG");
+    const idPagoTipo = await obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago);
+    const numeroPago = await generarNumeroPago(connection);
+    const documentoVenta = construirDocumentoVenta(venta.TipoComprobante, venta.Serie, venta.NumeroComprobante);
+
+    const stockProcesadoPorLote = new Map();
+
+    for (const detalle of detalles) {
+      const cantidadSalida = Number(detalle.CantidadUnidadesMinimas || 0);
+      const stockAnteriorBase = Number(detalle.StockActual || 0);
+      const stockYaProcesado = Number(stockProcesadoPorLote.get(detalle.IdLote) || 0);
+      const stockAnterior = stockAnteriorBase - stockYaProcesado;
+      const stockNuevo = stockAnterior - cantidadSalida;
+
+      if (cantidadSalida <= 0) {
+        throw new Error("El detalle del pedido tiene una cantidad invalida");
+      }
+
+      if (stockNuevo < 0) {
+        throw new Error("Stock insuficiente para pagar el pedido");
+      }
 
       await connection.query(
         `
@@ -2354,49 +2929,288 @@ app.post("/api/ventas", async (req, res) => {
         SET StockActual = StockActual - ?
         WHERE IdLote = ?
         `,
-        [detalle.cantidadUnidadesMinimas, idLoteDetalle]
+        [cantidadSalida, detalle.IdLote]
       );
 
       await registrarMovimientoInventario(connection, {
-        idLote: idLoteDetalle,
-        idUsuario,
+        idLote: detalle.IdLote,
+        idUsuario: req.usuario.idUsuario,
         tipoMovimiento: "SALIDA",
         tipoDocumento: "VENTA",
-        numeroDocumento: numeroComprobante || numeroVenta,
+        numeroDocumento: documentoVenta,
         tablaReferencia: "VE_Venta",
         idReferencia: idVenta,
-        cantidadSalida: detalle.cantidadUnidadesMinimas,
-        stockAnterior: stockAnteriorMovimiento,
-        stockNuevo: stockNuevoMovimiento,
-        costoUnitario: loteBloqueado.costoUnitario,
-        motivo: `Salida por venta (${detalle.cantidadDetalle} ${detalle.unidadVenta})`,
+        cantidadSalida,
+        stockAnterior,
+        stockNuevo,
+        costoUnitario: detalle.CostoCompraLote,
+        motivo: `Salida por pago de pedido ${venta.NumeroVenta} (${detalle.Cantidad} ${detalle.UnidadVenta || "UND"})`,
       });
 
-      loteBloqueado.cantidadProcesada += detalle.cantidadUnidadesMinimas;
+      stockProcesadoPorLote.set(detalle.IdLote, stockYaProcesado + cantidadSalida);
     }
+
+    await connection.query(
+      `
+      UPDATE VE_Venta
+      SET IdEstadoVenta = ?
+      WHERE IdVenta = ?
+      `,
+      [idEstadoPagado, idVenta]
+    );
+
+    const [pagoResult] = await connection.query(
+      `
+      INSERT INTO PG_Pago (NumeroPago, IdVenta, MontoTotal, EstadoPago)
+      VALUES (?, ?, ?, 'PAGADO')
+      `,
+      [numeroPago, idVenta, montoTotal]
+    );
+
+    await connection.query(
+      `
+      INSERT INTO DP_DetallePago (IdPago, IdTipoPago, Monto, Referencia)
+      VALUES (?, ?, ?, ?)
+      `,
+      [
+        pagoResult.insertId,
+        idPagoTipo,
+        montoTotal,
+        referencia || `Pago de ${documentoVenta}`,
+      ]
+    );
 
     await connection.commit();
 
-    res.status(201).json({
-      mensaje: "Venta registrada correctamente",
-      idVenta,
-      total,
+    res.json({
+      mensaje: "Pedido pagado correctamente",
+      idPago: pagoResult.insertId,
+      numeroPago,
+      documento: documentoVenta,
+      vuelto: montoRecibido - montoTotal,
     });
   } catch (error) {
     await connection.rollback();
-    console.error("Error al registrar venta:", error.message);
-    res.status(500).json({ error: error.message || "Error al registrar venta" });
+    console.error("Error al pagar pedido:", error.message);
+    res.status(500).json({ error: error.message || "Error al pagar pedido" });
   } finally {
     connection.release();
   }
 });
+
+app.post("/api/ventas/:id/anular", async (req, res) => {
+  const idVenta = parseInt(req.params.id);
+  const { motivo } = req.body || {};
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [ventas] = await connection.query(
+      `
+      SELECT
+        v.IdVenta,
+        v.Observacion,
+        ev.Codigo AS CodigoEstadoVenta
+      FROM VE_Venta v
+      INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+      WHERE v.IdVenta = ?
+        AND v.Estado = 'A'
+      FOR UPDATE
+      `,
+      [idVenta]
+    );
+
+    if (ventas.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Pedido no encontrado" });
+    }
+
+    const venta = ventas[0];
+
+    if (venta.CodigoEstadoVenta === "PAG") {
+      await connection.rollback();
+      return res.status(409).json({ error: "No se puede anular un pedido pagado desde este flujo" });
+    }
+
+    if (venta.CodigoEstadoVenta === "ANU") {
+      await connection.rollback();
+      return res.status(409).json({ error: "El pedido ya esta anulado" });
+    }
+
+    const idEstadoAnulado = await obtenerEstadoVentaId(connection, "ANU");
+    const observacionAnulada = [venta.Observacion, motivo ? `Anulado: ${motivo}` : "Anulado antes del pago"]
+      .filter(Boolean)
+      .join(" | ");
+
+    await connection.query(
+      `
+      UPDATE VE_Venta
+      SET
+        IdEstadoVenta = ?,
+        Observacion = ?
+      WHERE IdVenta = ?
+      `,
+      [idEstadoAnulado, observacionAnulada, idVenta]
+    );
+
+    await connection.commit();
+
+    res.json({ mensaje: "Pedido anulado correctamente" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error al anular pedido:", error.message);
+    res.status(500).json({ error: error.message || "Error al anular pedido" });
+  } finally {
+    connection.release();
+  }
+});
+
+async function responderDocumentoKardex(req, res) {
+  const idMovimiento = parseInt(req.params.id);
+
+  try {
+    const [movimientos] = await pool.query(
+      `
+      SELECT
+        m.IdMovimiento,
+        m.TablaReferencia,
+        m.IdReferencia,
+        m.FechaMovimiento,
+        m.NumeroDocumento,
+        m.CantidadEntrada,
+        m.CantidadSalida,
+        m.StockAnterior,
+        m.StockNuevo,
+        m.CostoUnitario,
+        m.ValorMovimiento,
+        m.Motivo,
+        tm.Codigo AS CodigoMovimiento,
+        tm.Nombre AS TipoMovimiento,
+        td.Codigo AS CodigoDocumento,
+        td.Nombre AS TipoDocumento,
+        i.Nombre AS Producto,
+        i.UnidadMedida AS UnidadMinima,
+        l.NumeroLote,
+        u.Username AS Usuario
+      FROM MI_MovimientoInventario m
+      INNER JOIN LT_Lote l ON m.IdLote = l.IdLote
+      INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+      INNER JOIN TM_TipoMovimiento tm ON m.IdTipoMovimiento = tm.IdTipoMovimiento
+      INNER JOIN TD_TipoDocumento td ON m.IdTipoDocumento = td.IdTipoDocumento
+      LEFT JOIN US_Usuario u ON m.IdUsuario = u.IdUsuario
+      WHERE m.IdMovimiento = ?
+      LIMIT 1
+      `,
+      [idMovimiento]
+    );
+
+    if (movimientos.length === 0) {
+      return res.status(404).json({ error: "Movimiento no encontrado" });
+    }
+
+    const movimiento = movimientos[0];
+    let documento = null;
+    let detalles = [];
+
+    if (movimiento.TablaReferencia === "VE_Venta" && movimiento.IdReferencia) {
+      const [ventas] = await pool.query(
+        `
+        SELECT
+          v.IdVenta,
+          v.NumeroVenta,
+          v.FechaVenta,
+          v.TipoComprobante,
+          v.Serie,
+          v.NumeroComprobante,
+          v.Subtotal,
+          v.Igv,
+          v.Total,
+          v.Observacion,
+          ev.Nombre AS EstadoVenta,
+          CONCAT(pc.Nombres, ' ', pc.Apellidos) AS Cliente,
+          u.Username AS Usuario
+        FROM VE_Venta v
+        INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta
+        INNER JOIN CL_Cliente c ON v.IdCliente = c.IdCliente
+        INNER JOIN PE_Persona pc ON c.IdPersona = pc.IdPersona
+        INNER JOIN US_Usuario u ON v.IdUsuario = u.IdUsuario
+        WHERE v.IdVenta = ?
+        LIMIT 1
+        `,
+        [movimiento.IdReferencia]
+      );
+
+      documento = ventas[0] || null;
+
+      const [detalleVenta] = await pool.query(
+        `
+        SELECT
+          i.Nombre AS Producto,
+          l.NumeroLote,
+          dv.Cantidad,
+          COALESCE(uv.Nombre, dv.UnidadVenta, i.UnidadMedida, 'UND') AS UnidadVenta,
+          dv.FactorConversion,
+          dv.CantidadUnidadesMinimas,
+          dv.PrecioUnitario,
+          dv.Descuento,
+          dv.Subtotal
+        FROM DV_DetalleVenta dv
+        INNER JOIN LT_Lote l ON dv.IdLote = l.IdLote
+        INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+        LEFT JOIN UV_UnidadVenta uv ON dv.IdUnidadVenta = uv.IdUnidadVenta
+        WHERE dv.IdVenta = ?
+        ORDER BY dv.IdDetalleVenta ASC
+        `,
+        [movimiento.IdReferencia]
+      );
+
+      detalles = detalleVenta;
+    } else if (movimiento.TablaReferencia === "LT_Lote" && movimiento.IdReferencia) {
+      const [lotes] = await pool.query(
+        `
+        SELECT
+          l.IdLote,
+          l.NumeroLote,
+          l.FechaIngreso,
+          l.FechaVencimiento,
+          l.CostoCompraLote,
+          l.StockActual,
+          i.Nombre AS Producto,
+          i.UnidadMedida AS UnidadMinima,
+          pv.RazonSocial AS Proveedor
+        FROM LT_Lote l
+        INNER JOIN IT_Item i ON l.IdItem = i.IdItem
+        LEFT JOIN PV_Proveedor pv ON i.IdProveedor = pv.IdProveedor
+        WHERE l.IdLote = ?
+        LIMIT 1
+        `,
+        [movimiento.IdReferencia]
+      );
+
+      documento = lotes[0] || null;
+    }
+
+    res.json({
+      movimiento,
+      documento,
+      detalles,
+    });
+  } catch (error) {
+    console.error("Error al obtener documento de Kardex:", error);
+    res.status(500).json({ error: "Error al obtener documento de Kardex" });
+  }
+}
+
+app.get("/api/kardex/:id/documento", responderDocumentoKardex);
+app.get("/api/kardex/documento/:id", responderDocumentoKardex);
 
 /* =========================
    KARDEX / MOVIMIENTOS DE INVENTARIO
 ========================= */
 
 app.get("/api/kardex", async (req, res) => {
-  const { idLote, idItem } = req.query;
+  const { idLote, idItem, tipoMovimiento, tipoDocumento, fechaDesde, fechaHasta } = req.query;
   const condiciones = [];
   const parametros = [];
 
@@ -2410,6 +3224,26 @@ app.get("/api/kardex", async (req, res) => {
     parametros.push(parseInt(idItem));
   }
 
+  if (tipoMovimiento) {
+    condiciones.push("tm.Codigo = ?");
+    parametros.push(normalizarCodigoDocumento(tipoMovimiento));
+  }
+
+  if (tipoDocumento) {
+    condiciones.push("td.Codigo = ?");
+    parametros.push(normalizarCodigoDocumento(tipoDocumento));
+  }
+
+  if (fechaDesde) {
+    condiciones.push("DATE(m.FechaMovimiento) >= ?");
+    parametros.push(fechaDesde);
+  }
+
+  if (fechaHasta) {
+    condiciones.push("DATE(m.FechaMovimiento) <= ?");
+    parametros.push(fechaHasta);
+  }
+
   const where = condiciones.length > 0 ? `WHERE ${condiciones.join(" AND ")}` : "";
 
   try {
@@ -2417,14 +3251,45 @@ app.get("/api/kardex", async (req, res) => {
       `
       SELECT
         m.IdMovimiento,
+        m.TablaReferencia,
+        m.IdReferencia,
         m.FechaMovimiento,
+        i.IdItem,
         i.Nombre AS Producto,
         i.UnidadMedida AS UnidadMinima,
+        l.IdLote,
         l.NumeroLote,
         tm.Codigo AS CodigoMovimiento,
         tm.Nombre AS TipoMovimiento,
+        td.Codigo AS CodigoDocumento,
         td.Nombre AS TipoDocumento,
         m.NumeroDocumento,
+        CASE
+          WHEN td.Codigo = 'VENTA' THEN COALESCE(v.TipoComprobante, 'Venta')
+          WHEN td.Codigo = 'LOTE' THEN 'Ingreso de lote'
+          WHEN td.Codigo = 'AJUSTE' THEN 'Ajuste de inventario'
+          ELSE td.Nombre
+        END AS DocumentoTipo,
+        CASE
+          WHEN td.Codigo = 'VENTA' THEN v.Serie
+          ELSE NULL
+        END AS DocumentoSerie,
+        CASE
+          WHEN td.Codigo = 'VENTA' THEN v.NumeroComprobante
+          WHEN td.Codigo = 'LOTE' THEN lr.NumeroLote
+          ELSE m.NumeroDocumento
+        END AS DocumentoNumero,
+        CASE
+          WHEN td.Codigo = 'VENTA' THEN CONCAT(v.TipoComprobante, ' ', v.Serie, '-', v.NumeroComprobante)
+          WHEN td.Codigo = 'LOTE' THEN CONCAT('Lote ', lr.NumeroLote)
+          WHEN td.Codigo = 'AJUSTE' THEN COALESCE(m.NumeroDocumento, CONCAT('Ajuste #', m.IdMovimiento))
+          ELSE COALESCE(m.NumeroDocumento, '-')
+        END AS DocumentoCompleto,
+        v.NumeroVenta,
+        v.TipoComprobante,
+        v.Serie,
+        v.NumeroComprobante,
+        v.Total AS TotalDocumento,
         m.CantidadEntrada,
         m.CantidadSalida,
         m.StockAnterior,
@@ -2439,6 +3304,10 @@ app.get("/api/kardex", async (req, res) => {
       INNER JOIN TM_TipoMovimiento tm ON m.IdTipoMovimiento = tm.IdTipoMovimiento
       INNER JOIN TD_TipoDocumento td ON m.IdTipoDocumento = td.IdTipoDocumento
       LEFT JOIN US_Usuario u ON m.IdUsuario = u.IdUsuario
+      LEFT JOIN VE_Venta v ON m.TablaReferencia = 'VE_Venta'
+        AND m.IdReferencia = v.IdVenta
+      LEFT JOIN LT_Lote lr ON m.TablaReferencia = 'LT_Lote'
+        AND m.IdReferencia = lr.IdLote
       ${where}
       ORDER BY m.FechaMovimiento DESC, m.IdMovimiento DESC
       LIMIT 300
@@ -2489,7 +3358,7 @@ app.post("/api/chatbot", async (req, res) => {
 
     const [productos] = await pool.query(
       `
-      SELECT 
+      SELECT
         i.IdItem,
         i.Nombre,
         i.Descripcion,

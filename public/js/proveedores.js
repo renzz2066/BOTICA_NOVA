@@ -44,10 +44,14 @@ inputBuscar.addEventListener("input", () => {
   const texto = inputBuscar.value.toLowerCase();
 
   const filtrados = proveedores.filter((proveedor) => {
+    const razon = String(proveedor.RazonSocial || "").toLowerCase();
+    const documento = String(proveedor.Ruc || "").toLowerCase();
+    const telefonoProveedor = String(proveedor.Telefono || "").toLowerCase();
+
     return (
-      proveedor.RazonSocial.toLowerCase().includes(texto) ||
-      proveedor.Ruc.toLowerCase().includes(texto) ||
-      proveedor.Telefono?.toLowerCase().includes(texto)
+      razon.includes(texto) ||
+      documento.includes(texto) ||
+      telefonoProveedor.includes(texto)
     );
   });
 
@@ -72,23 +76,35 @@ formProveedor.addEventListener("submit", async (event) => {
 
   try {
     if (idProveedor.value) {
-      await fetch(`${API_PROVEEDORES}/${idProveedor.value}`, {
+      const respuesta = await fetch(`${API_PROVEEDORES}/${idProveedor.value}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(proveedor),
       });
+      const data = await respuesta.json();
+
+      if (!respuesta.ok) {
+        alert(data.error || "Error al actualizar proveedor");
+        return;
+      }
 
       alert("Proveedor actualizado correctamente");
     } else {
-      await fetch(API_PROVEEDORES, {
+      const respuesta = await fetch(API_PROVEEDORES, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(proveedor),
       });
+      const data = await respuesta.json();
+
+      if (!respuesta.ok) {
+        alert(data.error || "Error al registrar proveedor");
+        return;
+      }
 
       alert("Proveedor registrado correctamente");
     }
@@ -104,7 +120,13 @@ formProveedor.addEventListener("submit", async (event) => {
 async function cargarProveedores() {
   try {
     const respuesta = await fetch(API_PROVEEDORES);
-    proveedores = await respuesta.json();
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(data.error || "Error al cargar proveedores");
+    }
+
+    proveedores = Array.isArray(data) ? data : [];
 
     mostrarProveedores(proveedores);
   } catch (error) {
@@ -172,6 +194,11 @@ async function editarProveedor(id) {
     const respuesta = await fetch(`${API_PROVEEDORES}/${id}`);
     const proveedor = await respuesta.json();
 
+    if (!respuesta.ok) {
+      alert(proveedor.error || "Error al obtener proveedor");
+      return;
+    }
+
     tituloModal.textContent = "Editar proveedor";
 
     idProveedor.value = proveedor.IdProveedor;
@@ -201,9 +228,15 @@ async function eliminarProveedor(id) {
   }
 
   try {
-    await fetch(`${API_PROVEEDORES}/${id}`, {
+    const respuesta = await fetch(`${API_PROVEEDORES}/${id}`, {
       method: "DELETE",
     });
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      alert(data.error || "Error al eliminar proveedor");
+      return;
+    }
 
     alert("Proveedor eliminado correctamente");
     cargarProveedores();

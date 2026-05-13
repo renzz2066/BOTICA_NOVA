@@ -1,4 +1,28 @@
-USE BD_BoticaProyecto;
+USE botica_nova;
+
+-- Insertar persona para el usuario "admin"
+INSERT INTO PE_Persona (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+SELECT 'Administrador', 'Sistema', 'DNI', '11111111', NULL, NULL, NULL
+WHERE NOT EXISTS (SELECT 1 FROM PE_Persona WHERE NumeroDocumento = '11111111');
+
+-- Insertar usuario "admin" (obtiene el IdPersona del último insert)
+INSERT INTO US_Usuario (IdPersona, Username, PasswordHash, Rol)
+SELECT IdPersona, 'admin', '123456', 'ADMIN'
+FROM PE_Persona
+WHERE NumeroDocumento = '11111111'
+  AND NOT EXISTS (SELECT 1 FROM US_Usuario WHERE Username = 'admin');
+
+-- Insertar persona para el usuario "cajero"
+INSERT INTO PE_Persona (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+SELECT 'Cajero', 'Ventas', 'DNI', '22222222', NULL, NULL, NULL
+WHERE NOT EXISTS (SELECT 1 FROM PE_Persona WHERE NumeroDocumento = '22222222');
+
+-- Insertar usuario "cajero" (obtiene el IdPersona del último insert)
+INSERT INTO US_Usuario (IdPersona, Username, PasswordHash, Rol)
+SELECT IdPersona, 'cajero', '123456', 'CAJERO'
+FROM PE_Persona
+WHERE NumeroDocumento = '22222222'
+  AND NOT EXISTS (SELECT 1 FROM US_Usuario WHERE Username = 'cajero');
 
 CREATE TABLE IF NOT EXISTS UV_UnidadVenta (
     IdUnidadVenta Int AUTO_INCREMENT PRIMARY KEY,

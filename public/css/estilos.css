@@ -373,6 +373,14 @@ td {
   background: #b91c1c;
 }
 
+.btn-pagar {
+  background: #16a34a;
+}
+
+.btn-pagar:hover {
+  background: #15803d;
+}
+
 .modal {
   position: fixed;
   top: 0;
@@ -560,7 +568,7 @@ td {
 }
 
 .tarjetas-kardex {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
 }
 
 .filtros-kardex {
@@ -597,8 +605,147 @@ td {
   color: #1d4ed8;
 }
 
+.documento-badge {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: bold;
+  background: #eef2ff;
+  color: #3730a3;
+  margin-bottom: 4px;
+}
+
+.documento-badge.venta {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.documento-badge.lote {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.documento-badge.ajuste {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.documento-numero {
+  display: block;
+  font-weight: bold;
+}
+
+.cantidad.entrada {
+  color: #166534;
+  font-weight: bold;
+}
+
+.cantidad.salida {
+  color: #c2410c;
+  font-weight: bold;
+}
+
+.btn-ver {
+  background: #0f766e;
+}
+
+.btn-ver:hover {
+  background: #115e59;
+}
+
+.modal-documento {
+  max-width: 980px;
+}
+
+.modal-pago {
+  max-width: 720px;
+}
+
+.pago-form {
+  margin-top: 18px;
+}
+
+.documento-detalle {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.documento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.documento-dato {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.documento-dato span {
+  display: block;
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.documento-dato strong {
+  color: #111827;
+}
+
+.documento-tabla {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.documento-motivo,
+.mensaje-error {
+  background: #f9fafb;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.mensaje-error {
+  color: #b91c1c;
+}
+
+.badge-estado {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 82px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: bold;
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.badge-estado.pen {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-estado.pag {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-estado.anu {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 @media (max-width: 900px) {
   .tarjetas-kardex {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .documento-grid {
     grid-template-columns: 1fr;
   }
 }

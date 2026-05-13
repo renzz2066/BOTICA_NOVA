@@ -59,11 +59,16 @@ inputBuscar.addEventListener("input", () => {
   const texto = inputBuscar.value.toLowerCase();
 
   const filtrados = productos.filter((producto) => {
+    const nombreProducto = String(producto.Nombre || "").toLowerCase();
+    const codigoProducto = String(producto.Codigo || "").toLowerCase();
+    const categoriaProducto = String(producto.Categoria || "").toLowerCase();
+    const marcaProducto = String(producto.Marca || "").toLowerCase();
+
     return (
-      producto.Nombre.toLowerCase().includes(texto) ||
-      producto.Codigo?.toLowerCase().includes(texto) ||
-      producto.Categoria?.toLowerCase().includes(texto) ||
-      producto.Marca?.toLowerCase().includes(texto)
+      nombreProducto.includes(texto) ||
+      codigoProducto.includes(texto) ||
+      categoriaProducto.includes(texto) ||
+      marcaProducto.includes(texto)
     );
   });
 
@@ -152,7 +157,13 @@ formProducto.addEventListener("submit", async (event) => {
 async function cargarProductos() {
   try {
     const respuesta = await fetch(API_PRODUCTOS);
-    productos = await respuesta.json();
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(data.error || "Error al cargar productos");
+    }
+
+    productos = Array.isArray(data) ? data : [];
 
     mostrarProductos(productos);
   } catch (error) {
@@ -221,9 +232,13 @@ async function cargarSelect(url, select, campoId, campoNombre, textoInicial) {
     const respuesta = await fetch(url);
     const datos = await respuesta.json();
 
+    if (!respuesta.ok) {
+      throw new Error(datos.error || "Error al cargar select");
+    }
+
     select.innerHTML = `<option value="">${textoInicial}</option>`;
 
-    datos.forEach((item) => {
+    (Array.isArray(datos) ? datos : []).forEach((item) => {
       select.innerHTML += `
         <option value="${item[campoId]}">${item[campoNombre]}</option>
       `;

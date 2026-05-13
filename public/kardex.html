@@ -39,6 +39,11 @@
           Lotes
         </a>
 
+        <a href="kardex.html" class="activo">
+          <i class="fa-solid fa-clipboard-list"></i>
+          Kardex
+        </a>
+
         <a href="ventas.html">
           <i class="fa-solid fa-cart-shopping"></i>
           Ventas
@@ -100,6 +105,16 @@
             <p>Salida minima</p>
           </div>
         </div>
+
+        <div class="tarjeta">
+          <div class="icono rojo">
+            <i class="fa-solid fa-boxes-stacked"></i>
+          </div>
+          <div>
+            <h3 id="saldoFinal">0</h3>
+            <p>Ultimo saldo</p>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
@@ -116,6 +131,36 @@
             <select id="filtroLote">
               <option value="">Todos los lotes</option>
             </select>
+          </div>
+
+          <div class="campo">
+            <label>Movimiento</label>
+            <select id="filtroMovimiento">
+              <option value="">Todos</option>
+              <option value="ENTRADA">Entradas</option>
+              <option value="SALIDA">Salidas</option>
+              <option value="AJUSTE">Ajustes</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Documento</label>
+            <select id="filtroDocumento">
+              <option value="">Todos</option>
+              <option value="LOTE">Ingreso de lote</option>
+              <option value="VENTA">Venta</option>
+              <option value="AJUSTE">Ajuste</option>
+            </select>
+          </div>
+
+          <div class="campo">
+            <label>Desde</label>
+            <input type="date" id="fechaDesde">
+          </div>
+
+          <div class="campo">
+            <label>Hasta</label>
+            <input type="date" id="fechaHasta">
           </div>
 
           <div class="campo campo-completo">
@@ -148,13 +193,16 @@
                 <th>Salida min.</th>
                 <th>Stock ant.</th>
                 <th>Stock nuevo</th>
+                <th>Costo</th>
+                <th>Valor</th>
                 <th>Usuario</th>
+                <th>Ver</th>
               </tr>
             </thead>
 
             <tbody id="tablaKardex">
               <tr>
-                <td colspan="10">Cargando movimientos...</td>
+                <td colspan="13">Cargando movimientos...</td>
               </tr>
             </tbody>
           </table>
@@ -163,6 +211,19 @@
 
     </main>
 
+  </div>
+
+  <div class="modal" id="modalDocumento">
+    <div class="modal-contenido modal-documento">
+      <div class="modal-header">
+        <h2 id="tituloDocumento">Documento</h2>
+        <button class="btn-cerrar" id="btnCerrarDocumento">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div id="contenidoDocumento" class="documento-detalle"></div>
+    </div>
   </div>
 
   <script src="js/auth.js"></script>

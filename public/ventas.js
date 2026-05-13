@@ -1,5 +1,6 @@
 const API_LOTES_DISPONIBLES = "/api/lotes-disponibles";
 const API_VENTAS = "/api/ventas";
+const API_TIPOS_PAGO = "/api/tipos-pago";
 
 const idLote = document.getElementById("idLote");
 const idUnidadVenta = document.getElementById("idUnidadVenta");
@@ -10,6 +11,17 @@ const descuento = document.getElementById("descuento");
 const btnAgregar = document.getElementById("btnAgregar");
 const btnGuardarVenta = document.getElementById("btnGuardarVenta");
 const btnLimpiar = document.getElementById("btnLimpiar");
+const modalPago = document.getElementById("modalPago");
+const formPago = document.getElementById("formPago");
+const btnCerrarPago = document.getElementById("btnCerrarPago");
+const btnCancelarPago = document.getElementById("btnCancelarPago");
+const idVentaPago = document.getElementById("idVentaPago");
+const pagoNumeroVenta = document.getElementById("pagoNumeroVenta");
+const pagoDocumento = document.getElementById("pagoDocumento");
+const pagoTotalTexto = document.getElementById("pagoTotalTexto");
+const idTipoPago = document.getElementById("idTipoPago");
+const montoPago = document.getElementById("montoPago");
+const referenciaPago = document.getElementById("referenciaPago");
 
 const tablaDetalleVenta = document.getElementById("tablaDetalleVenta");
 const tablaVentas = document.getElementById("tablaVentas");
@@ -25,9 +37,10 @@ const observacion = document.getElementById("observacion");
 
 let lotesDisponibles = [];
 let detalleVenta = [];
+let ventasRegistradas = [];
 
 document.addEventListener("DOMContentLoaded", async () => {
-  await cargarLotesDisponibles();
+  await Promise.all([cargarLotesDisponibles(), cargarTiposPago()]);
   await cargarVentas();
 });
 
@@ -60,17 +73,57 @@ btnLimpiar.addEventListener("click", () => {
   limpiarVenta();
 });
 
+btnCerrarPago.addEventListener("click", cerrarModalPago);
+btnCancelarPago.addEventListener("click", cerrarModalPago);
+
+modalPago.addEventListener("click", (event) => {
+  if (event.target === modalPago) {
+    cerrarModalPago();
+  }
+});
+
+formPago.addEventListener("submit", (event) => {
+  event.preventDefault();
+  pagarPedido();
+});
+
+tablaVentas.addEventListener("click", (event) => {
+  const botonPagar = event.target.closest("[data-accion='pagar']");
+  const botonAnular = event.target.closest("[data-accion='anular']");
+
+  if (botonPagar) {
+    abrirModalPago(parseInt(botonPagar.dataset.idVenta));
+    return;
+  }
+
+  if (botonAnular) {
+    anularPedido(parseInt(botonAnular.dataset.idVenta));
+  }
+});
+
+tipoComprobante.addEventListener("change", () => {
+  if (!serie.value.trim() || ["B001", "F001", "T001"].includes(serie.value.trim().toUpperCase())) {
+    serie.value = obtenerSeriePorDefecto(tipoComprobante.value);
+  }
+});
+
 async function cargarLotesDisponibles() {
   try {
     const respuesta = await fetch(API_LOTES_DISPONIBLES);
-    lotesDisponibles = await respuesta.json();
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(data.error || "Error al cargar productos disponibles");
+    }
+
+    lotesDisponibles = Array.isArray(data) ? data : [];
 
     idLote.innerHTML = `<option value="">Seleccione producto...</option>`;
 
     lotesDisponibles.forEach((lote) => {
       idLote.innerHTML += `
         <option value="${lote.IdLote}">
-          ${lote.Producto} - ${lote.Marca} - Lote: ${lote.NumeroLote} - Stock: ${formatearStockMinimo(lote)}
+          ${lote.Producto} - ${lote.Marca} - Lote: ${lote.NumeroLote} - Disponible: ${formatearStockMinimo(lote)}
         </option>
       `;
     });
@@ -85,26 +138,35 @@ async function cargarVentas() {
     const respuesta = await fetch(API_VENTAS);
     const ventas = await respuesta.json();
 
-    if (ventas.length === 0) {
+    if (!respuesta.ok) {
+      throw new Error(ventas.error || "Error al cargar pedidos");
+    }
+
+    ventasRegistradas = Array.isArray(ventas) ? ventas : [];
+
+    if (ventasRegistradas.length === 0) {
       tablaVentas.innerHTML = `
         <tr>
-          <td colspan="7">No hay ventas registradas</td>
+          <td colspan="10">No hay pedidos registrados</td>
         </tr>
       `;
       return;
     }
 
-    tablaVentas.innerHTML = ventas
+    tablaVentas.innerHTML = ventasRegistradas
       .map((venta) => {
         return `
           <tr>
             <td>${venta.IdVenta}</td>
             <td>${venta.NumeroVenta}</td>
+            <td>${formatearDocumentoVenta(venta)}</td>
             <td>${formatearFecha(venta.FechaVenta)}</td>
             <td>${venta.Cliente}</td>
             <td>${venta.Usuario}</td>
             <td>S/ ${Number(venta.Total).toFixed(2)}</td>
-            <td>${venta.EstadoVenta}</td>
+            <td>${crearBadgeEstado(venta.CodigoEstadoVenta, venta.EstadoVenta)}</td>
+            <td>${venta.NumeroPago ? `${venta.TipoPago || "Pago"} - ${venta.NumeroPago}` : "-"}</td>
+            <td>${crearAccionesPedido(venta)}</td>
           </tr>
         `;
       })
@@ -113,7 +175,7 @@ async function cargarVentas() {
     console.error("Error al cargar ventas:", error);
     tablaVentas.innerHTML = `
       <tr>
-        <td colspan="7">Error al cargar ventas</td>
+        <td colspan="10">Error al cargar pedidos</td>
       </tr>
     `;
   }
@@ -254,7 +316,7 @@ function quitarProducto(index) {
 
 async function guardarVenta() {
   if (detalleVenta.length === 0) {
-    alert("Agrega al menos un producto a la venta");
+    alert("Agrega al menos un producto al pedido");
     return;
   }
 
@@ -286,18 +348,112 @@ async function guardarVenta() {
     const data = await respuesta.json();
 
     if (!respuesta.ok) {
-      alert(data.error || "Error al registrar venta");
+      alert(data.error || "Error al generar pedido");
       return;
     }
 
-    alert("Venta registrada correctamente");
+    alert(`Pedido generado correctamente. Documento: ${data.documento || data.numeroVenta || ""}`);
 
     limpiarVenta();
     await cargarLotesDisponibles();
     await cargarVentas();
   } catch (error) {
-    console.error("Error al guardar venta:", error);
-    alert("Error al guardar venta");
+    console.error("Error al generar pedido:", error);
+    alert("Error al generar pedido");
+  }
+}
+
+function abrirModalPago(idVenta) {
+  const venta = ventasRegistradas.find((item) => item.IdVenta === idVenta);
+
+  if (!venta) {
+    alert("No se encontro el pedido seleccionado");
+    return;
+  }
+
+  idVentaPago.value = venta.IdVenta;
+  pagoNumeroVenta.textContent = venta.NumeroVenta;
+  pagoDocumento.textContent = formatearDocumentoVenta(venta);
+  pagoTotalTexto.textContent = `S/ ${Number(venta.Total || 0).toFixed(2)}`;
+  montoPago.value = Number(venta.Total || 0).toFixed(2);
+  referenciaPago.value = "";
+
+  modalPago.classList.add("mostrar");
+}
+
+function cerrarModalPago() {
+  modalPago.classList.remove("mostrar");
+}
+
+async function pagarPedido() {
+  const idVenta = idVentaPago.value;
+
+  if (!idVenta) {
+    return;
+  }
+
+  if (!idTipoPago.value) {
+    alert("Seleccione un tipo de pago");
+    return;
+  }
+
+  try {
+    const respuesta = await fetch(`${API_VENTAS}/${idVenta}/pagar`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        idTipoPago: parseInt(idTipoPago.value),
+        monto: parseFloat(montoPago.value),
+        referencia: referenciaPago.value.trim(),
+      }),
+    });
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      alert(data.error || "Error al pagar pedido");
+      return;
+    }
+
+    alert(`Pedido pagado correctamente. Pago: ${data.numeroPago}`);
+    cerrarModalPago();
+    await cargarLotesDisponibles();
+    await cargarVentas();
+  } catch (error) {
+    console.error("Error al pagar pedido:", error);
+    alert("Error al pagar pedido");
+  }
+}
+
+async function anularPedido(idVenta) {
+  const motivo = prompt("Motivo de anulacion del pedido:", "Cliente cancelo antes del pago");
+
+  if (motivo === null) {
+    return;
+  }
+
+  try {
+    const respuesta = await fetch(`${API_VENTAS}/${idVenta}/anular`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ motivo: motivo.trim() }),
+    });
+    const data = await respuesta.json();
+
+    if (!respuesta.ok) {
+      alert(data.error || "Error al anular pedido");
+      return;
+    }
+
+    alert("Pedido anulado correctamente");
+    await cargarLotesDisponibles();
+    await cargarVentas();
+  } catch (error) {
+    console.error("Error al anular pedido:", error);
+    alert("Error al anular pedido");
   }
 }
 
@@ -327,6 +483,32 @@ function cargarUnidadesVenta(lote) {
     precioUnitario.value = Number(primeraUnidad.PrecioVenta).toFixed(2);
   } else {
     precioUnitario.value = "";
+  }
+}
+
+async function cargarTiposPago() {
+  try {
+    const respuesta = await fetch(API_TIPOS_PAGO);
+    const tiposPago = await respuesta.json();
+
+    if (!respuesta.ok) {
+      throw new Error(tiposPago.error || "Error al cargar tipos de pago");
+    }
+
+    idTipoPago.innerHTML = `<option value="">Seleccione...</option>`;
+
+    (Array.isArray(tiposPago) ? tiposPago : []).forEach((tipo) => {
+      idTipoPago.innerHTML += `
+        <option value="${tipo.IdTipoPago}">${tipo.Nombre}</option>
+      `;
+    });
+
+    const efectivo = (Array.isArray(tiposPago) ? tiposPago : []).find((tipo) => tipo.Codigo === "EFE");
+    if (efectivo) {
+      idTipoPago.value = efectivo.IdTipoPago;
+    }
+  } catch (error) {
+    console.error("Error al cargar tipos de pago:", error);
   }
 }
 
@@ -401,11 +583,33 @@ function limpiarVenta() {
   mostrarDetalleVenta();
 
   tipoComprobante.value = "Boleta";
-  serie.value = "B001";
+  serie.value = obtenerSeriePorDefecto(tipoComprobante.value);
   numeroComprobante.value = "";
   observacion.value = "";
 
   limpiarCamposProducto();
+}
+
+function crearAccionesPedido(venta) {
+  if (venta.CodigoEstadoVenta === "PEN") {
+    return `
+      <div class="acciones-tabla">
+        <button class="btn-icono btn-pagar" title="Pagar pedido" data-accion="pagar" data-id-venta="${venta.IdVenta}">
+          <i class="fa-solid fa-money-bill-wave"></i>
+        </button>
+        <button class="btn-icono btn-eliminar" title="Anular pedido" data-accion="anular" data-id-venta="${venta.IdVenta}">
+          <i class="fa-solid fa-ban"></i>
+        </button>
+      </div>
+    `;
+  }
+
+  return "-";
+}
+
+function crearBadgeEstado(codigo, texto) {
+  const clase = String(codigo || "").toLowerCase();
+  return `<span class="badge-estado ${clase}">${texto || "-"}</span>`;
 }
 
 function formatearFecha(fecha) {
@@ -414,4 +618,26 @@ function formatearFecha(fecha) {
   }
 
   return new Date(fecha).toLocaleString("es-PE");
+}
+
+function formatearDocumentoVenta(venta) {
+  if (!venta.TipoComprobante && !venta.Serie && !venta.NumeroComprobante) {
+    return "-";
+  }
+
+  return `${venta.TipoComprobante || "Venta"} ${venta.Serie || ""}-${venta.NumeroComprobante || ""}`;
+}
+
+function obtenerSeriePorDefecto(tipo) {
+  const codigo = String(tipo || "").trim().toUpperCase();
+
+  if (codigo === "FACTURA") {
+    return "F001";
+  }
+
+  if (codigo === "TICKET") {
+    return "T001";
+  }
+
+  return "B001";
 }
