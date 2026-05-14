@@ -2442,9 +2442,7 @@ app.get("/api/lotes-disponibles", async (req, res) => {
    VENTAS
 ========================= */
 
-async function obtenerDatosVentaBasicos(connection) {
-  let idCliente;
-
+async function obtenerClienteGeneral(connection) {
   const [clientes] = await connection.query(`
     SELECT IdCliente
     FROM CL_Cliente
@@ -2453,26 +2451,147 @@ async function obtenerDatosVentaBasicos(connection) {
   `);
 
   if (clientes.length > 0) {
-    idCliente = clientes[0].IdCliente;
-  } else {
-    const [personaCliente] = await connection.query(`
-      INSERT INTO PE_Persona
-      (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
-      VALUES ('Cliente', 'General', 'DNI', '00000000', '', '', '')
-    `);
-
-    const [cliente] = await connection.query(
-      `
-      INSERT INTO CL_Cliente
-      (IdPersona, CodigoCliente)
-      VALUES (?, 'CLI-GENERAL')
-      `,
-      [personaCliente.insertId]
-    );
-
-    idCliente = cliente.insertId;
+    return clientes[0].IdCliente;
   }
 
+  const [personaCliente] = await connection.query(`
+    INSERT INTO PE_Persona
+    (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+    VALUES ('Cliente', 'General', 'DNI', '00000000', '', '', '')
+  `);
+
+  const [cliente] = await connection.query(
+    `
+    INSERT INTO CL_Cliente
+    (IdPersona, CodigoCliente)
+    VALUES (?, 'CLI-GENERAL')
+    `,
+    [personaCliente.insertId]
+  );
+
+  return cliente.insertId;
+}
+
+function separarNombreCliente(nombreCompleto) {
+  const partes = String(nombreCompleto || "").trim().split(/\s+/).filter(Boolean);
+
+  if (partes.length === 0) {
+    return {
+      nombres: "Cliente",
+      apellidos: "Sin nombre",
+    };
+  }
+
+  if (partes.length === 1) {
+    return {
+      nombres: partes[0],
+      apellidos: "Sin apellidos",
+    };
+  }
+
+  return {
+    nombres: partes.slice(0, -1).join(" "),
+    apellidos: partes.slice(-1).join(" "),
+  };
+}
+
+async function crearClienteDesdePersona(connection, idPersona) {
+  const [cliente] = await connection.query(
+    `
+    INSERT INTO CL_Cliente
+    (IdPersona)
+    VALUES (?)
+    `,
+    [idPersona]
+  );
+
+  await connection.query(
+    `
+    UPDATE CL_Cliente
+    SET CodigoCliente = CONCAT('CLI', IdCliente)
+    WHERE IdCliente = ?
+    `,
+    [cliente.insertId]
+  );
+
+  return cliente.insertId;
+}
+
+async function obtenerOCrearClienteVenta(connection, datosCliente = {}) {
+  datosCliente = datosCliente || {};
+
+  const numeroDocumento = String(datosCliente.numeroDocumento || datosCliente.dni || "").trim();
+  const tipoDocumento = String(datosCliente.tipoDocumento || (numeroDocumento ? "DNI" : "")).trim() || null;
+  const nombre = String(datosCliente.nombre || datosCliente.nombreCliente || "").trim();
+
+  if (!numeroDocumento && !nombre) {
+    return obtenerClienteGeneral(connection);
+  }
+
+  if (numeroDocumento) {
+    const [clientesDocumento] = await connection.query(
+      `
+      SELECT c.IdCliente
+      FROM CL_Cliente c
+      INNER JOIN PE_Persona p ON c.IdPersona = p.IdPersona
+      WHERE p.NumeroDocumento = ?
+      LIMIT 1
+      `,
+      [numeroDocumento]
+    );
+
+    if (clientesDocumento.length > 0) {
+      return clientesDocumento[0].IdCliente;
+    }
+
+    const [personasDocumento] = await connection.query(
+      `
+      SELECT IdPersona
+      FROM PE_Persona
+      WHERE NumeroDocumento = ?
+      LIMIT 1
+      `,
+      [numeroDocumento]
+    );
+
+    if (personasDocumento.length > 0) {
+      return crearClienteDesdePersona(connection, personasDocumento[0].IdPersona);
+    }
+  }
+
+  if (!numeroDocumento && nombre) {
+    const [clientesNombre] = await connection.query(
+      `
+      SELECT c.IdCliente
+      FROM CL_Cliente c
+      INNER JOIN PE_Persona p ON c.IdPersona = p.IdPersona
+      WHERE p.NumeroDocumento IS NULL
+        AND CONCAT(p.Nombres, ' ', p.Apellidos) = ?
+      LIMIT 1
+      `,
+      [nombre]
+    );
+
+    if (clientesNombre.length > 0) {
+      return clientesNombre[0].IdCliente;
+    }
+  }
+
+  const { nombres, apellidos } = separarNombreCliente(nombre);
+  const [personaCliente] = await connection.query(
+    `
+    INSERT INTO PE_Persona
+    (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
+    VALUES (?, ?, ?, ?, '', '', '')
+    `,
+    [nombres, apellidos, tipoDocumento, numeroDocumento || null]
+  );
+
+  return crearClienteDesdePersona(connection, personaCliente.insertId);
+}
+
+async function obtenerDatosVentaBasicos(connection, cliente) {
+  const idCliente = await obtenerOCrearClienteVenta(connection, cliente);
   const idEstadoVenta = await obtenerEstadoVentaId(connection, "PEN");
 
   return { idCliente, idEstadoVenta };
@@ -2522,6 +2641,7 @@ app.get("/api/ventas", async (req, res) => {
         pg.EstadoPago,
         tp.Nombre AS TipoPago,
         CONCAT(pc.Nombres, ' ', pc.Apellidos) AS Cliente,
+        pc.NumeroDocumento AS DocumentoCliente,
         u.Username AS Usuario
       FROM VE_Venta v
       INNER JOIN CL_Cliente c ON v.IdCliente = c.IdCliente
@@ -2595,7 +2715,7 @@ app.get("/api/ventas/:id", async (req, res) => {
 });
 
 app.post("/api/ventas", async (req, res) => {
-  const { tipoComprobante, serie, numeroComprobante, observacion, detalles } = req.body;
+  const { cliente, tipoComprobante, serie, numeroComprobante, observacion, detalles } = req.body;
 
   if (!detalles || detalles.length === 0) {
     return res.status(400).json({ error: "La venta debe tener al menos un producto" });
@@ -2606,7 +2726,7 @@ app.post("/api/ventas", async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection);
+    const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection, cliente);
     const idUsuario = req.usuario.idUsuario;
     const numeroVenta = `V${Date.now().toString().slice(-9)}`;
     const tipoComprobanteFinal = normalizarTipoComprobante(tipoComprobante);
@@ -3129,6 +3249,7 @@ async function responderDocumentoKardex(req, res) {
           v.Observacion,
           ev.Nombre AS EstadoVenta,
           CONCAT(pc.Nombres, ' ', pc.Apellidos) AS Cliente,
+          pc.NumeroDocumento AS DocumentoCliente,
           u.Username AS Usuario
         FROM VE_Venta v
         INNER JOIN EV_EstadoVenta ev ON v.IdEstadoVenta = ev.IdEstadoVenta

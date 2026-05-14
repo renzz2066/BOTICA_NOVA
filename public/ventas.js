@@ -7,6 +7,8 @@ const idUnidadVenta = document.getElementById("idUnidadVenta");
 const cantidad = document.getElementById("cantidad");
 const precioUnitario = document.getElementById("precioUnitario");
 const descuento = document.getElementById("descuento");
+const clienteDocumento = document.getElementById("clienteDocumento");
+const clienteNombre = document.getElementById("clienteNombre");
 
 const btnAgregar = document.getElementById("btnAgregar");
 const btnGuardarVenta = document.getElementById("btnGuardarVenta");
@@ -161,7 +163,7 @@ async function cargarVentas() {
             <td>${venta.NumeroVenta}</td>
             <td>${formatearDocumentoVenta(venta)}</td>
             <td>${formatearFecha(venta.FechaVenta)}</td>
-            <td>${venta.Cliente}</td>
+            <td>${formatearClienteVenta(venta)}</td>
             <td>${venta.Usuario}</td>
             <td>S/ ${Number(venta.Total).toFixed(2)}</td>
             <td>${crearBadgeEstado(venta.CodigoEstadoVenta, venta.EstadoVenta)}</td>
@@ -320,7 +322,15 @@ async function guardarVenta() {
     return;
   }
 
+  const documentoCliente = clienteDocumento.value.trim();
+  const nombreCliente = clienteNombre.value.trim();
+
   const venta = {
+    cliente: {
+      tipoDocumento: documentoCliente ? "DNI" : null,
+      numeroDocumento: documentoCliente || null,
+      nombre: nombreCliente || null,
+    },
     tipoComprobante: tipoComprobante.value,
     serie: serie.value.trim(),
     numeroComprobante: numeroComprobante.value.trim() || null,
@@ -582,6 +592,8 @@ function limpiarVenta() {
   detalleVenta = [];
   mostrarDetalleVenta();
 
+  clienteDocumento.value = "";
+  clienteNombre.value = "";
   tipoComprobante.value = "Boleta";
   serie.value = obtenerSeriePorDefecto(tipoComprobante.value);
   numeroComprobante.value = "";
@@ -626,6 +638,17 @@ function formatearDocumentoVenta(venta) {
   }
 
   return `${venta.TipoComprobante || "Venta"} ${venta.Serie || ""}-${venta.NumeroComprobante || ""}`;
+}
+
+function formatearClienteVenta(venta) {
+  const cliente = venta.Cliente || "Cliente General";
+  const documento = venta.DocumentoCliente;
+
+  if (!documento || documento === "00000000") {
+    return cliente;
+  }
+
+  return `${cliente} (${documento})`;
 }
 
 function obtenerSeriePorDefecto(tipo) {

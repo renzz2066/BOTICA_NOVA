@@ -407,6 +407,37 @@ td {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
 }
 
+.modal-producto {
+  max-width: 980px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-producto .modal-header {
+  flex-shrink: 0;
+}
+
+.modal-producto form {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.modal-producto form::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal-producto form::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.modal-producto form::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -464,6 +495,11 @@ td {
 .tabla-unidades-contenedor {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
+  overflow-x: auto;
+}
+
+.tabla-unidades {
+  min-width: 680px;
 }
 
 .tabla-unidades th,
@@ -511,7 +547,25 @@ td {
   margin-top: 25px;
 }
 
+.modal-producto .modal-footer {
+  position: sticky;
+  bottom: 0;
+  background: white;
+  padding-top: 16px;
+  padding-bottom: 2px;
+}
+
 @media (max-width: 700px) {
+  .modal {
+    align-items: flex-start;
+    padding: 10px;
+  }
+
+  .modal-producto {
+    max-height: calc(100vh - 20px);
+    padding: 18px;
+  }
+
   .form-grid {
     grid-template-columns: 1fr;
   }

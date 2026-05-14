@@ -1,13 +1,7 @@
--- =========================================
--- BASE DE DATOS
--- =========================================
+
 DROP DATABASE IF EXISTS botica_nova;
 CREATE DATABASE botica_nova;
 USE botica_nova;
-
--- =========================================
--- CATÁLOGOS
--- =========================================
 
 CREATE TABLE CA_Categoria (
     IdCategoria        Int AUTO_INCREMENT PRIMARY KEY,
