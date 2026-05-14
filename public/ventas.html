@@ -89,11 +89,36 @@
 
         <div class="form-grid">
 
-          <div class="campo">
+          <div class="campo campo-completo">
             <label>Producto / Lote</label>
-            <select id="idLote">
+            <div class="busqueda-producto-venta">
+            <input type="text" id="inputBuscarProducto" placeholder="Buscar por producto, marca, presentación o lote...">
+              <input type="text" id="inputCodigoBarrasVenta" placeholder="Código de barras">
+            </div>
+            <select id="idLote" class="select-oculto">
               <option value="">Seleccione producto...</option>
             </select>
+            <div class="tabla-contenedor selector-productos">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Código barras</th>
+                    <th>Producto</th>
+                    <th>Marca</th>
+                    <th>Presentación</th>
+                    <th>Lote</th>
+                    <th>Precio</th>
+                    <th>Stock</th>
+                    <th>Vence</th>
+                  </tr>
+                </thead>
+                <tbody id="tablaProductosVenta">
+                  <tr>
+                    <td colspan="8">Cargando productos disponibles...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div class="campo">
@@ -293,6 +318,6 @@
   </div>
 
   <script src="js/auth.js"></script>
-  <script src="ventas.js"></script>
+  <script src="ventas.js?v=20260514"></script>
 </body>
 </html>

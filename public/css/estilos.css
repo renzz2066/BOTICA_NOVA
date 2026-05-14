@@ -583,6 +583,57 @@ td {
   margin-bottom: 20px;
 }
 
+.select-oculto {
+  display: none;
+}
+
+.busqueda-producto-venta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: 10px;
+}
+
+.selector-productos {
+  margin-top: 10px;
+  max-height: 285px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.selector-productos table {
+  min-width: 910px;
+}
+
+.selector-productos thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.selector-productos th,
+.selector-productos td {
+  padding: 10px;
+}
+
+.fila-producto-venta {
+  cursor: pointer;
+}
+
+.fila-producto-venta:hover,
+.fila-producto-venta.seleccionado {
+  background: #e0f2fe;
+}
+
+.fila-producto-venta.seleccionado td:first-child {
+  border-left: 4px solid #0f766e;
+}
+
+@media (max-width: 700px) {
+  .busqueda-producto-venta {
+    grid-template-columns: 1fr;
+  }
+}
+
 .venta-acciones {
   margin: 20px 0;
 }

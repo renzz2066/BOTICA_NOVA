@@ -13,6 +13,8 @@ const inputBuscar = document.getElementById("inputBuscar");
 
 const idLote = document.getElementById("idLote");
 const idItem = document.getElementById("idItem");
+const codigoBarrasProducto = document.getElementById("codigoBarrasProducto");
+const unidadMinimaProducto = document.getElementById("unidadMinimaProducto");
 const numeroLote = document.getElementById("numeroLote");
 const fechaIngreso = document.getElementById("fechaIngreso");
 const fechaVencimiento = document.getElementById("fechaVencimiento");
@@ -20,6 +22,7 @@ const costoCompraLote = document.getElementById("costoCompraLote");
 const stockActual = document.getElementById("stockActual");
 
 let lotes = [];
+let productos = [];
 
 document.addEventListener("DOMContentLoaded", async () => {
   await cargarProductos();
@@ -44,12 +47,17 @@ inputBuscar.addEventListener("input", () => {
   const filtrados = lotes.filter((lote) => {
     return (
       lote.Producto.toLowerCase().includes(texto) ||
+      String(lote.CodigoBarras || "").toLowerCase().includes(texto) ||
       lote.NumeroLote.toLowerCase().includes(texto) ||
       String(lote.StockActual).includes(texto)
     );
   });
 
   mostrarLotes(filtrados);
+});
+
+idItem.addEventListener("change", () => {
+  autocompletarDatosProducto();
 });
 
 formLote.addEventListener("submit", async (event) => {
@@ -117,7 +125,7 @@ async function cargarLotes() {
     console.error("Error al cargar lotes:", error);
     tablaLotes.innerHTML = `
       <tr>
-        <td colspan="8">Error al cargar lotes</td>
+        <td colspan="9">Error al cargar lotes</td>
       </tr>
     `;
   }
@@ -127,7 +135,7 @@ function mostrarLotes(lista) {
   if (lista.length === 0) {
     tablaLotes.innerHTML = `
       <tr>
-        <td colspan="8">No hay lotes registrados</td>
+        <td colspan="9">No hay lotes registrados</td>
       </tr>
     `;
     return;
@@ -139,6 +147,7 @@ function mostrarLotes(lista) {
         <tr>
           <td>${lote.IdLote}</td>
           <td>${lote.Producto}</td>
+          <td>${lote.CodigoBarras || "-"}</td>
           <td>${lote.NumeroLote}</td>
           <td>${formatearFecha(lote.FechaIngreso)}</td>
           <td>${formatearFecha(lote.FechaVencimiento)}</td>
@@ -164,14 +173,14 @@ function mostrarLotes(lista) {
 async function cargarProductos() {
   try {
     const respuesta = await fetch(API_PRODUCTOS);
-    const productos = await respuesta.json();
+    productos = await respuesta.json();
 
     idItem.innerHTML = `<option value="">Seleccione producto...</option>`;
 
     productos.forEach((producto) => {
       idItem.innerHTML += `
         <option value="${producto.IdItem}">
-          ${producto.Nombre} - ${producto.Marca || ""} (${producto.UnidadMinima || producto.UnidadMedida || "UND"})
+          ${producto.CodigoBarras ? `${producto.CodigoBarras} - ` : ""}${producto.Nombre} - ${producto.Marca || ""} (${producto.UnidadMinima || producto.UnidadMedida || "UND"})
         </option>
       `;
     });
@@ -184,6 +193,7 @@ function abrirModalNuevo() {
   tituloModal.textContent = "Nuevo lote";
   formLote.reset();
   idLote.value = "";
+  autocompletarDatosProducto();
   modalLote.classList.add("mostrar");
 }
 
@@ -205,6 +215,7 @@ async function editarLote(id) {
 
     idLote.value = lote.IdLote;
     idItem.value = lote.IdItem;
+    autocompletarDatosProducto();
     numeroLote.value = lote.NumeroLote;
     fechaIngreso.value = convertirFechaInput(lote.FechaIngreso);
     fechaVencimiento.value = convertirFechaInput(lote.FechaVencimiento);
@@ -282,6 +293,29 @@ function formatearFecha(fecha) {
   }
 
   return new Date(fecha).toLocaleDateString("es-PE");
+}
+
+function obtenerProductoSeleccionado() {
+  const id = parseInt(idItem.value);
+
+  return productos.find((producto) => producto.IdItem === id);
+}
+
+function autocompletarDatosProducto() {
+  const producto = obtenerProductoSeleccionado();
+
+  if (!producto) {
+    codigoBarrasProducto.value = "";
+    unidadMinimaProducto.value = "";
+    return;
+  }
+
+  codigoBarrasProducto.value = producto.CodigoBarras || "";
+  unidadMinimaProducto.value = producto.UnidadMinima || producto.UnidadMedida || "UND";
+
+  if (!costoCompraLote.value && producto.PrecioCompra !== null && producto.PrecioCompra !== undefined) {
+    costoCompraLote.value = Number(producto.PrecioCompra || 0).toFixed(2);
+  }
 }
 
 function formatearStockLote(lote) {

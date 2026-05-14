@@ -88,6 +88,7 @@
               <tr>
                 <th>ID</th>
                 <th>Producto</th>
+                <th>Código barras</th>
                 <th>Número lote</th>
                 <th>Fecha ingreso</th>
                 <th>Fecha vencimiento</th>
@@ -99,7 +100,7 @@
 
             <tbody id="tablaLotes">
               <tr>
-                <td colspan="8">Cargando lotes...</td>
+                <td colspan="9">Cargando lotes...</td>
               </tr>
             </tbody>
           </table>
@@ -132,6 +133,16 @@
             <select id="idItem" required>
               <option value="">Seleccione producto...</option>
             </select>
+          </div>
+
+          <div class="campo">
+            <label>Código de barras</label>
+            <input type="text" id="codigoBarrasProducto" readonly>
+          </div>
+
+          <div class="campo">
+            <label>Unidad minima</label>
+            <input type="text" id="unidadMinimaProducto" readonly>
           </div>
 
           <div class="campo">
@@ -178,6 +189,6 @@
   </div>
 
   <script src="js/auth.js"></script>
-  <script src="js/lotes.js"></script>
+  <script src="js/lotes.js?v=20260514"></script>
 </body>
 </html>

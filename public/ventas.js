@@ -3,6 +3,9 @@ const API_VENTAS = "/api/ventas";
 const API_TIPOS_PAGO = "/api/tipos-pago";
 
 const idLote = document.getElementById("idLote");
+const inputBuscarProducto = document.getElementById("inputBuscarProducto");
+const inputCodigoBarrasVenta = document.getElementById("inputCodigoBarrasVenta");
+const tablaProductosVenta = document.getElementById("tablaProductosVenta");
 const idUnidadVenta = document.getElementById("idUnidadVenta");
 const cantidad = document.getElementById("cantidad");
 const precioUnitario = document.getElementById("precioUnitario");
@@ -55,6 +58,50 @@ idLote.addEventListener("change", () => {
     idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
     precioUnitario.value = "";
   }
+});
+
+inputBuscarProducto.addEventListener("input", () => {
+  mostrarProductosVenta();
+});
+
+inputCodigoBarrasVenta.addEventListener("input", () => {
+  mostrarProductosVenta();
+});
+
+inputBuscarProducto.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  event.preventDefault();
+
+  const primerProducto = obtenerLotesFiltrados()[0];
+  if (primerProducto) {
+    seleccionarProductoVenta(primerProducto.IdLote);
+  }
+});
+
+inputCodigoBarrasVenta.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  event.preventDefault();
+
+  const lote = buscarLotePorCodigoBarrasExacto() || obtenerLotesFiltrados()[0];
+  if (lote) {
+    seleccionarProductoVenta(lote.IdLote);
+  }
+});
+
+tablaProductosVenta.addEventListener("click", (event) => {
+  const fila = event.target.closest("[data-id-lote]");
+
+  if (!fila) {
+    return;
+  }
+
+  seleccionarProductoVenta(parseInt(fila.dataset.idLote));
 });
 
 idUnidadVenta.addEventListener("change", () => {
@@ -129,10 +176,102 @@ async function cargarLotesDisponibles() {
         </option>
       `;
     });
+
+    mostrarProductosVenta();
   } catch (error) {
     console.error("Error al cargar lotes disponibles:", error);
     alert("Error al cargar productos disponibles");
   }
+}
+
+function mostrarProductosVenta() {
+  const lotes = obtenerLotesFiltrados();
+
+  if (lotesDisponibles.length === 0) {
+    tablaProductosVenta.innerHTML = `
+      <tr>
+        <td colspan="8">No hay productos con stock disponible</td>
+      </tr>
+    `;
+    return;
+  }
+
+  if (lotes.length === 0) {
+    tablaProductosVenta.innerHTML = `
+      <tr>
+        <td colspan="8">No se encontraron productos para la búsqueda</td>
+      </tr>
+    `;
+    return;
+  }
+
+  tablaProductosVenta.innerHTML = lotes.slice(0, 12).map((lote) => {
+    const seleccionado = Number(idLote.value) === lote.IdLote ? " seleccionado" : "";
+
+    return `
+      <tr class="fila-producto-venta${seleccionado}" data-id-lote="${lote.IdLote}">
+        <td>${escaparHtml(lote.CodigoBarras || "-")}</td>
+        <td>
+          ${escaparHtml(lote.Producto)}
+          <span class="texto-secundario">${escaparHtml(lote.UnidadMinima || "UND")}</span>
+        </td>
+        <td>${escaparHtml(lote.Marca || "-")}</td>
+        <td>${escaparHtml(lote.Presentacion || "-")}</td>
+        <td>${escaparHtml(lote.NumeroLote || "-")}</td>
+        <td>S/ ${Number(lote.PrecioVenta || 0).toFixed(2)}</td>
+        <td>${formatearStockMinimo(lote)}</td>
+        <td>${formatearFechaCorta(lote.FechaVencimiento)}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function obtenerLotesFiltrados() {
+  const texto = normalizarTexto(inputBuscarProducto.value);
+  const codigoBarras = normalizarTexto(inputCodigoBarrasVenta.value);
+
+  if (!texto && !codigoBarras) {
+    return lotesDisponibles;
+  }
+
+  return lotesDisponibles.filter((lote) => {
+    const coincideTexto = !texto || [
+      lote.Producto,
+      lote.Marca,
+      lote.Presentacion,
+      lote.NumeroLote,
+      lote.UnidadMinima,
+      lote.FechaVencimiento,
+    ].some((valor) => normalizarTexto(valor).includes(texto));
+
+    const coincideCodigo = !codigoBarras || normalizarTexto(lote.CodigoBarras).includes(codigoBarras);
+
+    return coincideTexto && coincideCodigo;
+  });
+}
+
+function buscarLotePorCodigoBarrasExacto() {
+  const codigoBarras = normalizarTexto(inputCodigoBarrasVenta.value);
+
+  if (!codigoBarras) {
+    return null;
+  }
+
+  return lotesDisponibles.find((lote) => normalizarTexto(lote.CodigoBarras) === codigoBarras) || null;
+}
+
+function seleccionarProductoVenta(idLoteSeleccionado) {
+  const lote = lotesDisponibles.find((item) => item.IdLote === idLoteSeleccionado);
+
+  if (!lote) {
+    return;
+  }
+
+  idLote.value = lote.IdLote;
+  inputBuscarProducto.value = `${lote.Producto} - Lote ${lote.NumeroLote}`;
+  inputCodigoBarrasVenta.value = lote.CodigoBarras || "";
+  cargarUnidadesVenta(lote);
+  mostrarProductosVenta();
 }
 
 async function cargarVentas() {
@@ -582,10 +721,13 @@ function actualizarTotales() {
 
 function limpiarCamposProducto() {
   idLote.value = "";
+  inputBuscarProducto.value = "";
+  inputCodigoBarrasVenta.value = "";
   idUnidadVenta.innerHTML = `<option value="">Seleccione unidad...</option>`;
   cantidad.value = 1;
   precioUnitario.value = "";
   descuento.value = 0;
+  mostrarProductosVenta();
 }
 
 function limpiarVenta() {
@@ -632,6 +774,14 @@ function formatearFecha(fecha) {
   return new Date(fecha).toLocaleString("es-PE");
 }
 
+function formatearFechaCorta(fecha) {
+  if (!fecha) {
+    return "-";
+  }
+
+  return new Date(fecha).toLocaleDateString("es-PE");
+}
+
 function formatearDocumentoVenta(venta) {
   if (!venta.TipoComprobante && !venta.Serie && !venta.NumeroComprobante) {
     return "-";
@@ -663,4 +813,21 @@ function obtenerSeriePorDefecto(tipo) {
   }
 
   return "B001";
+}
+
+function normalizarTexto(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function escaparHtml(valor) {
+  return String(valor ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
