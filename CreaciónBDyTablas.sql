@@ -28,7 +28,7 @@ CREATE TABLE PR_Presentacion (
 CREATE TABLE TP_TipoPago (
     IdTipoPago         Int AUTO_INCREMENT PRIMARY KEY,
     Codigo             Varchar(5) NOT NULL UNIQUE,
-    Nombre             Varchar(50),
+    Nombre             Varchar(50) NOT NULL,
     Estado             Char(1) DEFAULT 'A'
 ) ENGINE = InnoDB;
 
@@ -64,7 +64,11 @@ CREATE TABLE PE_Persona (
     Telefono           Varchar(20),
     Correo             Varchar(100),
     Direccion          Varchar(150),
-    Estado             Char(1) DEFAULT 'A'
+    Estado             Char(1) DEFAULT 'A',
+
+    CHECK (Telefono IS NULL OR Telefono = '' OR Telefono REGEXP '^9[0-9]{8}$'),
+    CHECK (Correo IS NULL OR Correo = '' OR (Correo LIKE '%@%.%' AND Correo NOT LIKE '% %')),
+    CHECK (TipoDocumento IS NULL OR TipoDocumento NOT IN ('DNI', 'RUC') OR (TipoDocumento = 'DNI' AND NumeroDocumento REGEXP '^[0-9]{8}$') OR (TipoDocumento = 'RUC' AND NumeroDocumento REGEXP '^[0-9]{11}$'))
 ) ENGINE = InnoDB;
 
 CREATE TABLE PV_Proveedor (
@@ -75,6 +79,7 @@ CREATE TABLE PV_Proveedor (
     Ruc                Varchar(20) UNIQUE,
     Estado             Char(1) DEFAULT 'A',
 
+    CHECK (Ruc REGEXP '^[0-9]{11}$'),
     FOREIGN KEY (IdPersona) REFERENCES PE_Persona(IdPersona)
 ) ENGINE = InnoDB;
 
@@ -152,7 +157,9 @@ CREATE TABLE UV_UnidadVenta (
     UNIQUE (IdItem, Abreviatura),
     FOREIGN KEY (IdItem) 		REFERENCES IT_Item(IdItem),
 
-    CHECK (FactorConversion > 0)
+    CHECK (FactorConversion > 0),
+    CHECK (PrecioVenta IS NULL OR PrecioVenta >= 0),
+    CHECK (EsUnidadMinima IN ('S', 'N'))
 ) ENGINE = InnoDB;
 
 -- =========================================
@@ -171,7 +178,9 @@ CREATE TABLE LT_Lote (
     UsuarioRegistro    Varchar(20),
     FechaRegistro      Datetime DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY (IdItem) REFERENCES IT_Item(IdItem)
+    FOREIGN KEY (IdItem) REFERENCES IT_Item(IdItem),
+    CHECK (StockActual >= 0),
+    CHECK (CostoCompraLote IS NULL OR CostoCompraLote >= 0)
 ) ENGINE = InnoDB;
 
 CREATE INDEX idx_lote_item ON LT_Lote(IdItem);
@@ -191,8 +200,8 @@ CREATE TABLE MI_MovimientoInventario (
     IdReferencia        Int,
     CantidadEntrada     Int DEFAULT 0,
     CantidadSalida      Int DEFAULT 0,
-    StockAnterior       Int,
-    StockNuevo          Int,
+    StockAnterior       Int NOT NULL DEFAULT 0,
+    StockNuevo          Int NOT NULL DEFAULT 0,
     CostoUnitario       Decimal(12,2),
     ValorMovimiento     Decimal(12,2),
     MetodoCosto         Varchar(10),
@@ -204,10 +213,15 @@ CREATE TABLE MI_MovimientoInventario (
     FOREIGN KEY (IdTipoMovimiento) REFERENCES TM_TipoMovimiento(IdTipoMovimiento),
     FOREIGN KEY (IdTipoDocumento)  REFERENCES TD_TipoDocumento(IdTipoDocumento),
 
-    CHECK (CantidadEntrada >= 0 AND CantidadSalida >= 0)
+    CHECK (CantidadEntrada >= 0 AND CantidadSalida >= 0),
+    CHECK (NOT (CantidadEntrada > 0 AND CantidadSalida > 0)),
+    CHECK (StockAnterior >= 0 AND StockNuevo >= 0),
+    CHECK (CostoUnitario IS NULL OR CostoUnitario >= 0),
+    CHECK (ValorMovimiento IS NULL OR ValorMovimiento >= 0)
 ) ENGINE = InnoDB;
 
-CREATE INDEX idx_kardex_lote_fecha ON MI_MovimientoInventario(IdMovimiento, FechaMovimiento);
+CREATE INDEX idx_kardex_lote_fecha ON MI_MovimientoInventario(IdLote, FechaMovimiento);
+CREATE INDEX idx_kardex_referencia ON MI_MovimientoInventario(TablaReferencia, IdReferencia);
 
 -- =========================================
 -- ALERTAS
@@ -240,15 +254,21 @@ CREATE TABLE VE_Venta (
     Total              Decimal(12,2),
     TipoComprobante    Varchar(50),
     Serie              Varchar(10),
-    NumeroComprobante  Varchar(20) UNIQUE,
+    NumeroComprobante  Varchar(20),
     Moneda             Varchar(10) DEFAULT 'PEN',
     TipoCambio         Decimal(10,4),
     Observacion        Varchar(255),
     Estado             Char(1) DEFAULT 'A',
 
+    UNIQUE (Serie, NumeroComprobante),
     FOREIGN KEY (IdCliente)     	REFERENCES CL_Cliente(IdCliente),
     FOREIGN KEY (IdUsuario)     	REFERENCES US_Usuario(IdUsuario),
-    FOREIGN KEY (IdEstadoVenta) 	REFERENCES EV_EstadoVenta(IdEstadoVenta)
+    FOREIGN KEY (IdEstadoVenta) 	REFERENCES EV_EstadoVenta(IdEstadoVenta),
+    CHECK (Subtotal IS NULL OR Subtotal >= 0),
+    CHECK (Igv IS NULL OR Igv >= 0),
+    CHECK (Total IS NULL OR Total >= 0),
+    CHECK (TipoComprobante IS NULL OR TipoComprobante IN ('Boleta', 'Factura', 'Ticket')),
+    CHECK (Moneda = 'PEN')
 ) ENGINE = InnoDB;
 
 CREATE INDEX idx_venta_fecha ON VE_Venta(FechaVenta);
@@ -270,8 +290,15 @@ CREATE TABLE DV_DetalleVenta (
     FOREIGN KEY (IdLote)  			REFERENCES LT_Lote(IdLote),
     FOREIGN KEY (IdUnidadVenta)		REFERENCES UV_UnidadVenta(IdUnidadVenta),
 
-    CHECK (Cantidad >= 0)
+    CHECK (Cantidad > 0),
+    CHECK (FactorConversion > 0),
+    CHECK (CantidadUnidadesMinimas > 0),
+    CHECK (PrecioUnitario IS NULL OR PrecioUnitario >= 0),
+    CHECK (Descuento IS NULL OR Descuento >= 0),
+    CHECK (Subtotal IS NULL OR Subtotal >= 0)
 ) ENGINE = InnoDB;
+
+CREATE INDEX idx_detalle_venta_lote ON DV_DetalleVenta(IdLote);
 
 -- =========================================
 -- PAGOS
@@ -280,21 +307,24 @@ CREATE TABLE DV_DetalleVenta (
 CREATE TABLE PG_Pago (
     IdPago             Int AUTO_INCREMENT PRIMARY KEY,
     NumeroPago         Varchar(10) NOT NULL UNIQUE,
-    IdVenta            Int,
+    IdVenta            Int NOT NULL UNIQUE,
     FechaPago          Datetime DEFAULT CURRENT_TIMESTAMP,
-    MontoTotal         Decimal(12,2),
-    EstadoPago         Varchar(20),
+    MontoTotal         Decimal(12,2) NOT NULL,
+    EstadoPago         Varchar(20) NOT NULL,
 
-    FOREIGN KEY (IdVenta) REFERENCES VE_Venta(IdVenta)
+    FOREIGN KEY (IdVenta) REFERENCES VE_Venta(IdVenta),
+    CHECK (MontoTotal >= 0),
+    CHECK (EstadoPago IN ('PAGADO', 'ANULADO'))
 ) ENGINE = InnoDB;
 
 CREATE TABLE DP_DetallePago (
     IdDetallePago      Int AUTO_INCREMENT PRIMARY KEY,
     IdPago             Int NOT NULL,
     IdTipoPago         Int NOT NULL,
-    Monto              Decimal(12,2),
+    Monto              Decimal(12,2) NOT NULL,
     Referencia         Varchar(100),
 
     FOREIGN KEY (IdPago)     REFERENCES PG_Pago(IdPago),
-    FOREIGN KEY (IdTipoPago) REFERENCES TP_TipoPago(IdTipoPago)
+    FOREIGN KEY (IdTipoPago) REFERENCES TP_TipoPago(IdTipoPago),
+    CHECK (Monto > 0)
 ) ENGINE = InnoDB;

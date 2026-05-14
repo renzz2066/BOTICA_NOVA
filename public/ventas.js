@@ -65,7 +65,12 @@ inputBuscarProducto.addEventListener("input", () => {
 });
 
 inputCodigoBarrasVenta.addEventListener("input", () => {
+  inputCodigoBarrasVenta.value = inputCodigoBarrasVenta.value.replace(/\D/g, "");
   mostrarProductosVenta();
+});
+
+clienteDocumento.addEventListener("input", () => {
+  clienteDocumento.value = clienteDocumento.value.replace(/\D/g, "");
 });
 
 inputBuscarProducto.addEventListener("keydown", (event) => {
@@ -461,12 +466,28 @@ async function guardarVenta() {
     return;
   }
 
-  const documentoCliente = clienteDocumento.value.trim();
+  const documentoCliente = clienteDocumento.value.replace(/\D/g, "");
   const nombreCliente = clienteNombre.value.trim();
+  const tipoDocumentoCliente = documentoCliente.length === 11 ? "RUC" : documentoCliente ? "DNI" : null;
+
+  if (documentoCliente && !/^\d{8}$|^\d{11}$/.test(documentoCliente)) {
+    alert("El documento del cliente debe ser DNI de 8 digitos o RUC de 11 digitos");
+    return;
+  }
+
+  if (tipoComprobante.value === "Factura" && !/^\d{11}$/.test(documentoCliente)) {
+    alert("La factura requiere RUC de 11 digitos");
+    return;
+  }
+
+  if (documentoCliente.length === 11 && tipoComprobante.value !== "Factura") {
+    alert("Use Factura cuando el cliente se identifique con RUC");
+    return;
+  }
 
   const venta = {
     cliente: {
-      tipoDocumento: documentoCliente ? "DNI" : null,
+      tipoDocumento: tipoDocumentoCliente,
       numeroDocumento: documentoCliente || null,
       nombre: nombreCliente || null,
     },
@@ -546,6 +567,36 @@ async function pagarPedido() {
     return;
   }
 
+  const monto = parseFloat(montoPago.value);
+  const total = Number(
+    pagoTotalTexto.textContent
+      .replace("S/", "")
+      .trim()
+  );
+  const opcionPago = idTipoPago.options[idTipoPago.selectedIndex];
+  const codigoPago = opcionPago?.dataset.codigo || "";
+  const requiereReferencia = ["TDB", "TCR", "YAP", "PLI"].includes(codigoPago);
+
+  if (Number.isNaN(monto) || monto <= 0) {
+    alert("El monto recibido debe ser mayor a 0");
+    return;
+  }
+
+  if (monto < total) {
+    alert("El monto recibido no puede ser menor al total");
+    return;
+  }
+
+  if (codigoPago !== "EFE" && Math.abs(monto - total) > 0.009) {
+    alert("Los pagos con tarjeta o billetera digital deben coincidir con el total");
+    return;
+  }
+
+  if (requiereReferencia && !referenciaPago.value.trim()) {
+    alert("Ingrese una referencia para este metodo de pago");
+    return;
+  }
+
   try {
     const respuesta = await fetch(`${API_VENTAS}/${idVenta}/pagar`, {
       method: "POST",
@@ -554,7 +605,7 @@ async function pagarPedido() {
       },
       body: JSON.stringify({
         idTipoPago: parseInt(idTipoPago.value),
-        monto: parseFloat(montoPago.value),
+        monto,
         referencia: referenciaPago.value.trim(),
       }),
     });
@@ -648,7 +699,7 @@ async function cargarTiposPago() {
 
     (Array.isArray(tiposPago) ? tiposPago : []).forEach((tipo) => {
       idTipoPago.innerHTML += `
-        <option value="${tipo.IdTipoPago}">${tipo.Nombre}</option>
+        <option value="${tipo.IdTipoPago}" data-codigo="${tipo.Codigo}">${tipo.Nombre}</option>
       `;
     });
 

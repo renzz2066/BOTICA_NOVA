@@ -58,6 +58,22 @@ inputBuscar.addEventListener("input", () => {
   mostrarProveedores(filtrados);
 });
 
+[numeroDocumento, ruc, telefono].forEach((input) => {
+  input.addEventListener("input", () => {
+    if (input === numeroDocumento && tipoDocumento.value === "CE") {
+      input.value = input.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+      return;
+    }
+
+    input.value = input.value.replace(/\D/g, "");
+  });
+});
+
+tipoDocumento.addEventListener("change", () => {
+  numeroDocumento.value = "";
+  numeroDocumento.maxLength = tipoDocumento.value === "RUC" ? 11 : tipoDocumento.value === "CE" ? 12 : 8;
+});
+
 formProveedor.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -73,6 +89,13 @@ formProveedor.addEventListener("submit", async (event) => {
     correo: correo.value.trim(),
     direccion: direccion.value.trim(),
   };
+
+  const errorValidacion = validarProveedor(proveedor);
+
+  if (errorValidacion) {
+    alert(errorValidacion);
+    return;
+  }
 
   try {
     if (idProveedor.value) {
@@ -244,4 +267,36 @@ async function eliminarProveedor(id) {
     console.error("Error al eliminar proveedor:", error);
     alert("Error al eliminar proveedor");
   }
+}
+
+function validarProveedor(proveedor) {
+  if (!proveedor.nombres || !proveedor.apellidos || !proveedor.razonSocial) {
+    return "Nombres, apellidos y razon social son obligatorios";
+  }
+
+  if (proveedor.tipoDocumento === "DNI" && !/^\d{8}$/.test(proveedor.numeroDocumento)) {
+    return "El DNI debe tener 8 digitos";
+  }
+
+  if (proveedor.tipoDocumento === "RUC" && !/^\d{11}$/.test(proveedor.numeroDocumento)) {
+    return "El documento RUC debe tener 11 digitos";
+  }
+
+  if (proveedor.tipoDocumento === "CE" && !/^[A-Za-z0-9]{6,12}$/.test(proveedor.numeroDocumento)) {
+    return "El carnet de extranjeria debe tener entre 6 y 12 caracteres";
+  }
+
+  if (!/^\d{11}$/.test(proveedor.ruc)) {
+    return "El RUC del proveedor debe tener 11 digitos";
+  }
+
+  if (!/^9\d{8}$/.test(proveedor.telefono)) {
+    return "El telefono debe empezar con 9 y tener 9 digitos";
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(proveedor.correo)) {
+    return "El correo debe contener @ y un punto despues del dominio";
+  }
+
+  return null;
 }

@@ -129,8 +129,7 @@ function requireApiRole(req, res, next) {
     ruta.startsWith("/ventas") ||
     ruta.startsWith("/lotes-disponibles") ||
     ruta.startsWith("/tipos-pago") ||
-    ruta.startsWith("/alertas") ||
-    ruta.startsWith("/chatbot")
+    ruta.startsWith("/alertas")
   ) {
     return requireRole("ADMIN", "CAJERO")(req, res, next);
   }
@@ -154,7 +153,7 @@ async function verificarPassword(password, passwordHash) {
   return password === passwordHash;
 }
 
-async function asegurarUsuarioInicial(username, password, rol, nombres, apellidos, numeroDocumento) {
+async function asegurarUsuarioInicial(username, password, rol, nombres, apellidos, numeroDocumento, telefono, correo) {
   const [usuarios] = await pool.query(
     `
     SELECT IdUsuario
@@ -193,9 +192,9 @@ async function asegurarUsuarioInicial(username, password, rol, nombres, apellido
         `
         INSERT INTO PE_Persona
         (Nombres, Apellidos, TipoDocumento, NumeroDocumento, Telefono, Correo, Direccion)
-        VALUES (?, ?, 'DNI', ?, '', '', '')
+        VALUES (?, ?, 'DNI', ?, ?, ?, '')
         `,
-        [nombres, apellidos, numeroDocumento]
+        [nombres, apellidos, numeroDocumento, normalizarTelefono(telefono, true), normalizarCorreo(correo, true)]
       );
 
       idPersona = persona.insertId;
@@ -222,17 +221,24 @@ async function asegurarUsuarioInicial(username, password, rol, nombres, apellido
 }
 
 async function asegurarUsuariosIniciales() {
-  await asegurarUsuarioInicial("admin", "123456", "ADMIN", "Administrador", "Sistema", "11111111");
-  await asegurarUsuarioInicial("cajero", "123456", "CAJERO", "Cajero", "Ventas", "22222222");
+  await asegurarUsuarioInicial("admin", "123456", "ADMIN", "Administrador", "Sistema", "11111111", "987654321", "admin@boticanova.com");
+  await asegurarUsuarioInicial("cajero", "123456", "CAJERO", "Cajero", "Ventas", "22222222", "912345678", "cajero@boticanova.com");
 }
 
 const NOMBRES_TIPO_MOVIMIENTO = {
   ENTRADA: "Entrada",
   SALIDA: "Salida",
   AJUSTE: "Ajuste",
+  DCL: "Devolucion Cliente",
+  DPR: "Devolucion Proveedor",
+  VNC: "Producto Vencido",
 };
 
 const NOMBRES_TIPO_DOCUMENTO = {
+  DNI: "DNI",
+  RUC: "RUC",
+  BOL: "Boleta",
+  FAC: "Factura",
   LOTE: "Registro de lote",
   VENTA: "Venta",
   AJUSTE: "Ajuste de stock",
@@ -250,6 +256,23 @@ const SERIES_COMPROBANTE = {
   TICKET: "T001",
 };
 
+const TIPOS_COMPROBANTE = {
+  BOLETA: "Boleta",
+  FACTURA: "Factura",
+  TICKET: "Ticket",
+};
+
+const PREFIJO_SERIE_COMPROBANTE = {
+  Boleta: "B",
+  Factura: "F",
+  Ticket: "T",
+};
+
+const TIPOS_DOCUMENTO_PERSONA = new Set(["DNI", "RUC", "CE"]);
+const TIPOS_MOVIMIENTO_VALIDOS = new Set(Object.keys(NOMBRES_TIPO_MOVIMIENTO));
+const TIPOS_DOCUMENTO_KARDEX_VALIDOS = new Set(Object.keys(NOMBRES_TIPO_DOCUMENTO));
+const TIPOS_PAGO_CON_REFERENCIA = new Set(["TDB", "TCR", "YAP", "PLI"]);
+
 function normalizarCodigoDocumento(texto) {
   return String(texto || "")
     .trim()
@@ -258,22 +281,267 @@ function normalizarCodigoDocumento(texto) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function crearErrorValidacion(mensaje) {
+  const error = new Error(mensaje);
+  error.statusCode = 400;
+  return error;
+}
+
+function limpiarTexto(valor) {
+  return String(valor || "").trim().replace(/\s+/g, " ");
+}
+
+function soloDigitos(valor) {
+  return String(valor || "").replace(/\D/g, "");
+}
+
+function redondearMoneda(valor) {
+  return Number(Number(valor || 0).toFixed(2));
+}
+
+function normalizarTelefono(telefono, obligatorio = false) {
+  const telefonoLimpio = soloDigitos(telefono);
+
+  if (!telefonoLimpio) {
+    if (obligatorio) {
+      throw crearErrorValidacion("El telefono es obligatorio");
+    }
+
+    return null;
+  }
+
+  if (!/^9\d{8}$/.test(telefonoLimpio)) {
+    throw crearErrorValidacion("El telefono debe empezar con 9 y tener 9 digitos");
+  }
+
+  return telefonoLimpio;
+}
+
+function normalizarCorreo(correo, obligatorio = false) {
+  const correoLimpio = limpiarTexto(correo).toLowerCase();
+
+  if (!correoLimpio) {
+    if (obligatorio) {
+      throw crearErrorValidacion("El correo es obligatorio");
+    }
+
+    return null;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correoLimpio)) {
+    throw crearErrorValidacion("El correo debe contener @ y un punto despues del dominio");
+  }
+
+  return correoLimpio;
+}
+
+function normalizarDocumentoPersona(tipoDocumento, numeroDocumento, obligatorio = false) {
+  const tipo = normalizarCodigoDocumento(tipoDocumento || (numeroDocumento ? "DNI" : ""));
+  const numero = tipo === "CE" ? limpiarTexto(numeroDocumento).toUpperCase() : soloDigitos(numeroDocumento);
+
+  if (!tipo && !numero) {
+    if (obligatorio) {
+      throw crearErrorValidacion("El documento de identidad es obligatorio");
+    }
+
+    return { tipoDocumento: null, numeroDocumento: null };
+  }
+
+  if (!TIPOS_DOCUMENTO_PERSONA.has(tipo)) {
+    throw crearErrorValidacion("Tipo de documento no valido");
+  }
+
+  if (!numero) {
+    throw crearErrorValidacion("El numero de documento es obligatorio");
+  }
+
+  if (tipo === "DNI" && !/^\d{8}$/.test(numero)) {
+    throw crearErrorValidacion("El DNI debe tener 8 digitos");
+  }
+
+  if (tipo === "RUC" && !/^\d{11}$/.test(numero)) {
+    throw crearErrorValidacion("El RUC debe tener 11 digitos");
+  }
+
+  if (tipo === "CE" && !/^[A-Z0-9]{6,12}$/.test(numero)) {
+    throw crearErrorValidacion("El carnet de extranjeria debe tener entre 6 y 12 caracteres");
+  }
+
+  return { tipoDocumento: tipo, numeroDocumento: numero };
+}
+
+function normalizarRuc(ruc) {
+  const rucLimpio = soloDigitos(ruc);
+
+  if (!/^\d{11}$/.test(rucLimpio)) {
+    throw crearErrorValidacion("El RUC debe tener 11 digitos");
+  }
+
+  return rucLimpio;
+}
+
+function normalizarProveedorPayload(datos, requiereIdPersona = false) {
+  const idPersona = datos.idPersona ? parseInt(datos.idPersona) : null;
+
+  if (requiereIdPersona && (!idPersona || Number.isNaN(idPersona))) {
+    throw crearErrorValidacion("IdPersona es obligatorio");
+  }
+
+  const nombres = limpiarTexto(datos.nombres);
+  const apellidos = limpiarTexto(datos.apellidos);
+  const razonSocial = limpiarTexto(datos.razonSocial);
+
+  if (!nombres || !apellidos || !razonSocial) {
+    throw crearErrorValidacion("Nombres, apellidos y razon social son obligatorios");
+  }
+
+  const documento = normalizarDocumentoPersona(datos.tipoDocumento || "DNI", datos.numeroDocumento, true);
+
+  return {
+    idPersona,
+    nombres,
+    apellidos,
+    tipoDocumento: documento.tipoDocumento,
+    numeroDocumento: documento.numeroDocumento,
+    telefono: normalizarTelefono(datos.telefono, true),
+    correo: normalizarCorreo(datos.correo, true),
+    direccion: limpiarTexto(datos.direccion) || null,
+    razonSocial,
+    ruc: normalizarRuc(datos.ruc),
+  };
+}
+
 function normalizarTipoComprobante(tipoComprobante) {
-  const codigo = normalizarCodigoDocumento(tipoComprobante);
+  const codigo = normalizarCodigoDocumento(tipoComprobante || "Boleta");
+  const tipo = TIPOS_COMPROBANTE[codigo];
 
-  if (codigo === "FACTURA") {
-    return "Factura";
+  if (!tipo) {
+    throw crearErrorValidacion("Tipo de comprobante no valido");
   }
 
-  if (codigo === "TICKET") {
-    return "Ticket";
-  }
-
-  return "Boleta";
+  return tipo;
 }
 
 function obtenerSeriePorDefecto(tipoComprobante) {
   return SERIES_COMPROBANTE[normalizarCodigoDocumento(tipoComprobante)] || "B001";
+}
+
+function normalizarSerieComprobante(tipoComprobante, serie) {
+  const tipo = normalizarTipoComprobante(tipoComprobante);
+  const serieNormalizada = limpiarTexto(serie || obtenerSeriePorDefecto(tipo)).toUpperCase();
+  const prefijoEsperado = PREFIJO_SERIE_COMPROBANTE[tipo];
+
+  if (!new RegExp(`^${prefijoEsperado}[0-9]{3}$`).test(serieNormalizada)) {
+    throw crearErrorValidacion(`La serie para ${tipo} debe tener el formato ${prefijoEsperado}001`);
+  }
+
+  return serieNormalizada;
+}
+
+function normalizarNumeroComprobanteManual(numeroComprobante) {
+  const numero = soloDigitos(numeroComprobante);
+
+  if (!numero) {
+    return null;
+  }
+
+  if (numero.length > 10) {
+    throw crearErrorValidacion("El numero de comprobante no puede superar 10 digitos");
+  }
+
+  return numero.padStart(6, "0");
+}
+
+function normalizarFechaISO(fecha) {
+  const texto = limpiarTexto(fecha);
+  return texto || null;
+}
+
+function validarFechasLote(fechaIngreso, fechaVencimiento) {
+  const ingreso = normalizarFechaISO(fechaIngreso);
+  const vencimiento = normalizarFechaISO(fechaVencimiento);
+
+  if (!vencimiento) {
+    return { fechaIngreso: ingreso, fechaVencimiento: null };
+  }
+
+  const fechaVencimientoDate = new Date(`${vencimiento}T00:00:00`);
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  if (Number.isNaN(fechaVencimientoDate.getTime())) {
+    throw crearErrorValidacion("La fecha de vencimiento no es valida");
+  }
+
+  if (fechaVencimientoDate < hoy) {
+    throw crearErrorValidacion("No se puede registrar un lote vencido");
+  }
+
+  if (ingreso) {
+    const fechaIngresoDate = new Date(`${ingreso}T00:00:00`);
+
+    if (Number.isNaN(fechaIngresoDate.getTime())) {
+      throw crearErrorValidacion("La fecha de ingreso no es valida");
+    }
+
+    if (fechaVencimientoDate <= fechaIngresoDate) {
+      throw crearErrorValidacion("La fecha de vencimiento debe ser posterior a la fecha de ingreso");
+    }
+  }
+
+  return { fechaIngreso: ingreso, fechaVencimiento: vencimiento };
+}
+
+function normalizarClienteVentaPayload(cliente = {}, tipoComprobante = "Boleta") {
+  const tipo = normalizarTipoComprobante(tipoComprobante);
+  const numero = soloDigitos(cliente.numeroDocumento || cliente.dni);
+  const nombre = limpiarTexto(cliente.nombre || cliente.nombreCliente);
+
+  if (!numero && !nombre) {
+    if (tipo === "Factura") {
+      throw crearErrorValidacion("La factura requiere RUC del cliente");
+    }
+
+    return {
+      tipoDocumento: null,
+      numeroDocumento: null,
+      nombre: null,
+    };
+  }
+
+  if (!numero) {
+    if (tipo === "Factura") {
+      throw crearErrorValidacion("La factura requiere RUC del cliente");
+    }
+
+    return {
+      tipoDocumento: null,
+      numeroDocumento: null,
+      nombre,
+    };
+  }
+
+  let tipoDocumento = normalizarCodigoDocumento(cliente.tipoDocumento || (numero.length === 11 ? "RUC" : "DNI"));
+
+  if (tipo === "Factura") {
+    tipoDocumento = "RUC";
+  }
+
+  const documento = normalizarDocumentoPersona(tipoDocumento, numero, Boolean(numero));
+
+  if (tipo === "Factura" && documento.tipoDocumento !== "RUC") {
+    throw crearErrorValidacion("La factura requiere un RUC de 11 digitos");
+  }
+
+  if ((tipo === "Boleta" || tipo === "Ticket") && documento.tipoDocumento === "RUC") {
+    throw crearErrorValidacion("Use Factura cuando el cliente se identifique con RUC");
+  }
+
+  return {
+    tipoDocumento: documento.tipoDocumento,
+    numeroDocumento: documento.numeroDocumento,
+    nombre: nombre || null,
+  };
 }
 
 function formatearNumeroComprobante(numero) {
@@ -378,11 +646,11 @@ async function obtenerEstadoVentaId(connection, codigo) {
   return result.insertId;
 }
 
-async function obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago) {
+async function obtenerTipoPago(connection, idTipoPago, codigoTipoPago) {
   if (idTipoPago) {
     const [rows] = await connection.query(
       `
-      SELECT IdTipoPago
+      SELECT IdTipoPago, Codigo, Nombre
       FROM TP_TipoPago
       WHERE IdTipoPago = ?
         AND Estado = 'A'
@@ -392,14 +660,14 @@ async function obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago) {
     );
 
     if (rows.length > 0) {
-      return rows[0].IdTipoPago;
+      return rows[0];
     }
   }
 
   const codigo = normalizarCodigoDocumento(codigoTipoPago || "EFE");
   const [rows] = await connection.query(
     `
-    SELECT IdTipoPago
+    SELECT IdTipoPago, Codigo, Nombre
     FROM TP_TipoPago
     WHERE Codigo = ?
       AND Estado = 'A'
@@ -412,7 +680,12 @@ async function obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago) {
     throw new Error("El tipo de pago seleccionado no existe");
   }
 
-  return rows[0].IdTipoPago;
+  return rows[0];
+}
+
+async function obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago) {
+  const tipoPago = await obtenerTipoPago(connection, idTipoPago, codigoTipoPago);
+  return tipoPago.IdTipoPago;
 }
 
 async function generarNumeroPago(connection) {
@@ -426,19 +699,62 @@ async function generarNumeroPago(connection) {
 }
 
 async function registrarMovimientoInventario(connection, movimiento) {
+  const idLote = parseInt(movimiento.idLote);
   const cantidadEntrada = Number(movimiento.cantidadEntrada || 0);
   const cantidadSalida = Number(movimiento.cantidadSalida || 0);
+  const stockAnterior = Number(movimiento.stockAnterior);
+  const stockNuevo = Number(movimiento.stockNuevo);
+  const tipoMovimiento = normalizarCodigoDocumento(movimiento.tipoMovimiento);
+  const tipoDocumento = normalizarCodigoDocumento(movimiento.tipoDocumento);
   const costoUnitario = movimiento.costoUnitario === undefined || movimiento.costoUnitario === null
     ? null
     : Number(movimiento.costoUnitario);
   const cantidadMovimiento = cantidadEntrada > 0 ? cantidadEntrada : cantidadSalida;
-  const valorMovimiento = costoUnitario === null ? null : costoUnitario * cantidadMovimiento;
-  const idTipoMovimiento = await obtenerTipoMovimientoId(connection, movimiento.tipoMovimiento);
-  const idTipoDocumento = await obtenerTipoDocumentoId(connection, movimiento.tipoDocumento);
+  const valorMovimiento = costoUnitario === null ? null : redondearMoneda(costoUnitario * cantidadMovimiento);
 
-  if (cantidadEntrada <= 0 && cantidadSalida <= 0 && movimiento.tipoMovimiento !== "AJUSTE") {
+  if (!idLote || Number.isNaN(idLote)) {
+    throw new Error("El movimiento debe estar asociado a un lote valido");
+  }
+
+  if (!TIPOS_MOVIMIENTO_VALIDOS.has(tipoMovimiento)) {
+    throw new Error("Tipo de movimiento de inventario no valido");
+  }
+
+  if (!TIPOS_DOCUMENTO_KARDEX_VALIDOS.has(tipoDocumento)) {
+    throw new Error("Tipo de documento de Kardex no valido");
+  }
+
+  if (
+    !Number.isInteger(cantidadEntrada) ||
+    !Number.isInteger(cantidadSalida) ||
+    cantidadEntrada < 0 ||
+    cantidadSalida < 0
+  ) {
+    throw new Error("Las cantidades del movimiento deben ser enteros positivos");
+  }
+
+  if (cantidadEntrada > 0 && cantidadSalida > 0) {
+    throw new Error("Un movimiento no puede registrar entrada y salida a la vez");
+  }
+
+  if (cantidadEntrada <= 0 && cantidadSalida <= 0 && tipoMovimiento !== "AJUSTE") {
     throw new Error("El movimiento de inventario debe registrar entrada o salida");
   }
+
+  if (Number.isNaN(stockAnterior) || Number.isNaN(stockNuevo) || stockAnterior < 0 || stockNuevo < 0) {
+    throw new Error("El movimiento debe tener stock anterior y stock nuevo validos");
+  }
+
+  if (stockNuevo !== stockAnterior + cantidadEntrada - cantidadSalida) {
+    throw new Error("El stock del movimiento no coincide con la entrada o salida registrada");
+  }
+
+  if (costoUnitario !== null && (Number.isNaN(costoUnitario) || costoUnitario < 0)) {
+    throw new Error("El costo unitario del movimiento no puede ser negativo");
+  }
+
+  const idTipoMovimiento = await obtenerTipoMovimientoId(connection, tipoMovimiento);
+  const idTipoDocumento = await obtenerTipoDocumentoId(connection, tipoDocumento);
 
   await connection.query(
     `
@@ -452,7 +768,7 @@ async function registrarMovimientoInventario(connection, movimiento) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
     `,
     [
-      movimiento.idLote,
+      idLote,
       movimiento.idUsuario || null,
       idTipoMovimiento,
       idTipoDocumento,
@@ -1241,7 +1557,6 @@ const paginasProtegidas = [
   { ruta: "/kardex.html", archivo: "kardex.html", roles: ["ADMIN"] },
   { ruta: "/ventas.html", archivo: "ventas.html", roles: ["ADMIN", "CAJERO"] },
   { ruta: "/alertas.html", archivo: "alertas.html", roles: ["ADMIN", "CAJERO"] },
-  { ruta: "/chatbot.html", archivo: "chatbot.html", roles: ["ADMIN", "CAJERO"] },
 ];
 
 paginasProtegidas.forEach((pagina) => {
@@ -1571,22 +1886,12 @@ app.get("/api/proveedores/:id", async (req, res) => {
 });
 
 app.post("/api/proveedores", async (req, res) => {
-  const {
-    nombres,
-    apellidos,
-    tipoDocumento,
-    numeroDocumento,
-    telefono,
-    correo,
-    direccion,
-    razonSocial,
-    ruc,
-  } = req.body;
+  let proveedor;
 
-  if (!nombres || !apellidos || !razonSocial || !ruc) {
-    return res.status(400).json({
-      error: "Nombres, apellidos, razón social y RUC son obligatorios",
-    });
+  try {
+    proveedor = normalizarProveedorPayload(req.body);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
   }
 
   const connection = await pool.getConnection();
@@ -1601,13 +1906,13 @@ app.post("/api/proveedores", async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        nombres,
-        apellidos,
-        tipoDocumento || null,
-        numeroDocumento || null,
-        telefono || null,
-        correo || null,
-        direccion || null,
+        proveedor.nombres,
+        proveedor.apellidos,
+        proveedor.tipoDocumento,
+        proveedor.numeroDocumento,
+        proveedor.telefono,
+        proveedor.correo,
+        proveedor.direccion,
       ]
     );
 
@@ -1619,13 +1924,13 @@ app.post("/api/proveedores", async (req, res) => {
       (IdPersona, RazonSocial, Ruc)
       VALUES (?, ?, ?)
       `,
-      [idPersona, razonSocial, ruc]
+      [idPersona, proveedor.razonSocial, proveedor.ruc]
     );
 
     await connection.query(
       `
       UPDATE PV_Proveedor
-      SET Codigo = CONCAT('PRO', IdProveedor)
+      SET Codigo = CONCAT('PRO', LPAD(IdProveedor, 3, '0'))
       WHERE IdProveedor = ?
       `,
       [proveedorResult.insertId]
@@ -1661,21 +1966,12 @@ app.post("/api/proveedores", async (req, res) => {
 app.put("/api/proveedores/:id", async (req, res) => {
   const idProveedor = parseInt(req.params.id);
 
-  const {
-    idPersona,
-    nombres,
-    apellidos,
-    tipoDocumento,
-    numeroDocumento,
-    telefono,
-    correo,
-    direccion,
-    razonSocial,
-    ruc,
-  } = req.body;
+  let proveedor;
 
-  if (!idPersona) {
-    return res.status(400).json({ error: "IdPersona es obligatorio" });
+  try {
+    proveedor = normalizarProveedorPayload(req.body, true);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
   }
 
   const connection = await pool.getConnection();
@@ -1697,14 +1993,14 @@ app.put("/api/proveedores/:id", async (req, res) => {
       WHERE IdPersona = ?
       `,
       [
-        nombres,
-        apellidos,
-        tipoDocumento || null,
-        numeroDocumento || null,
-        telefono || null,
-        correo || null,
-        direccion || null,
-        idPersona,
+        proveedor.nombres,
+        proveedor.apellidos,
+        proveedor.tipoDocumento,
+        proveedor.numeroDocumento,
+        proveedor.telefono,
+        proveedor.correo,
+        proveedor.direccion,
+        proveedor.idPersona,
       ]
     );
 
@@ -1716,7 +2012,7 @@ app.put("/api/proveedores/:id", async (req, res) => {
         Ruc = ?
       WHERE IdProveedor = ?
       `,
-      [razonSocial, ruc, idProveedor]
+      [proveedor.razonSocial, proveedor.ruc, idProveedor]
     );
 
     await connection.commit();
@@ -1725,6 +2021,16 @@ app.put("/api/proveedores/:id", async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("Error al actualizar proveedor:", error);
+    if (error.code === "ER_DUP_ENTRY") {
+      if (error.sqlMessage?.includes("NumeroDocumento")) {
+        return res.status(409).json({ error: "Ya existe una persona con ese numero de documento" });
+      }
+
+      if (error.sqlMessage?.includes("Ruc")) {
+        return res.status(409).json({ error: "Ya existe un proveedor con ese RUC" });
+      }
+    }
+
     res.status(500).json({ error: "Error al actualizar proveedor" });
   } finally {
     connection.release();
@@ -1820,8 +2126,12 @@ app.post("/api/productos", async (req, res) => {
   const precioCompraNumero = precioCompra === undefined || precioCompra === null || precioCompra === ""
     ? null
     : parseFloat(precioCompra);
+  const stockMinimoNumero = stockMinimo === undefined || stockMinimo === null || stockMinimo === ""
+    ? 0
+    : parseInt(stockMinimo);
+  const unidadMedidaNormalizada = normalizarUnidadMinima(unidadMedida);
 
-  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
+  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion || !unidadMedidaNormalizada) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
@@ -1829,6 +2139,18 @@ app.post("/api/productos", async (req, res) => {
 
   if (precioCompraNumero !== null && (Number.isNaN(precioCompraNumero) || precioCompraNumero < 0)) {
     return res.status(400).json({ error: "El precio de compra no puede ser negativo" });
+  }
+
+  if (precioCompraNumero !== null && precioCompraNumero > precioVentaNumero) {
+    return res.status(400).json({ error: "El precio de compra no puede ser mayor al precio de venta" });
+  }
+
+  if (Number.isNaN(stockMinimoNumero) || stockMinimoNumero < 0) {
+    return res.status(400).json({ error: "El stock minimo no puede ser negativo" });
+  }
+
+  if (codigoBarras && !/^[0-9]{6,20}$/.test(soloDigitos(codigoBarras))) {
+    return res.status(400).json({ error: "El codigo de barras debe contener entre 6 y 20 digitos" });
   }
 
   const connection = await pool.getConnection();
@@ -1848,7 +2170,7 @@ app.post("/api/productos", async (req, res) => {
       `,
       [
         codigo || null,
-        codigoBarras || null,
+        codigoBarras ? soloDigitos(codigoBarras) : null,
         nombre,
         descripcion || null,
         precioVentaNumero,
@@ -1859,13 +2181,13 @@ app.post("/api/productos", async (req, res) => {
         idProveedor || null,
         requiereReceta || "N",
         esControlado || "N",
-        unidadMedida,
-        stockMinimo || 0,
+        unidadMedidaNormalizada,
+        stockMinimoNumero,
         usuarioRegistro || "admin",
       ]
     );
 
-    await guardarUnidadesVentaProducto(connection, result.insertId, unidadesVenta, unidadMedida, precioVentaNumero);
+    await guardarUnidadesVentaProducto(connection, result.insertId, unidadesVenta, unidadMedidaNormalizada, precioVentaNumero);
 
     await connection.commit();
 
@@ -1933,8 +2255,12 @@ app.put("/api/productos/:id", async (req, res) => {
   const precioCompraNumero = precioCompra === undefined || precioCompra === null || precioCompra === ""
     ? null
     : parseFloat(precioCompra);
+  const stockMinimoNumero = stockMinimo === undefined || stockMinimo === null || stockMinimo === ""
+    ? 0
+    : parseInt(stockMinimo);
+  const unidadMedidaNormalizada = normalizarUnidadMinima(unidadMedida);
 
-  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion) {
+  if (!nombre || Number.isNaN(precioVentaNumero) || precioVentaNumero <= 0 || !idCategoria || !idMarca || !idPresentacion || !unidadMedidaNormalizada) {
     return res.status(400).json({
       error: "Nombre, precio venta, categoría, marca y presentación son obligatorios",
     });
@@ -1942,6 +2268,18 @@ app.put("/api/productos/:id", async (req, res) => {
 
   if (precioCompraNumero !== null && (Number.isNaN(precioCompraNumero) || precioCompraNumero < 0)) {
     return res.status(400).json({ error: "El precio de compra no puede ser negativo" });
+  }
+
+  if (precioCompraNumero !== null && precioCompraNumero > precioVentaNumero) {
+    return res.status(400).json({ error: "El precio de compra no puede ser mayor al precio de venta" });
+  }
+
+  if (Number.isNaN(stockMinimoNumero) || stockMinimoNumero < 0) {
+    return res.status(400).json({ error: "El stock minimo no puede ser negativo" });
+  }
+
+  if (codigoBarras && !/^[0-9]{6,20}$/.test(soloDigitos(codigoBarras))) {
+    return res.status(400).json({ error: "El codigo de barras debe contener entre 6 y 20 digitos" });
   }
 
   const connection = await pool.getConnection();
@@ -1973,7 +2311,7 @@ app.put("/api/productos/:id", async (req, res) => {
       `,
       [
         codigo || null,
-        codigoBarras || null,
+        codigoBarras ? soloDigitos(codigoBarras) : null,
         nombre,
         descripcion || null,
         precioVentaNumero,
@@ -1984,8 +2322,8 @@ app.put("/api/productos/:id", async (req, res) => {
         idProveedor || null,
         requiereReceta || "N",
         esControlado || "N",
-        unidadMedida,
-        stockMinimo || 0,
+        unidadMedidaNormalizada,
+        stockMinimoNumero,
         usuarioModifica || "admin",
         id,
       ]
@@ -1996,7 +2334,7 @@ app.put("/api/productos/:id", async (req, res) => {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    await guardarUnidadesVentaProducto(connection, id, unidadesVenta, unidadMedida, precioVentaNumero);
+    await guardarUnidadesVentaProducto(connection, id, unidadesVenta, unidadMedidaNormalizada, precioVentaNumero);
 
     await connection.commit();
 
@@ -2092,12 +2430,15 @@ app.post("/api/lotes", async (req, res) => {
     stockActual,
     usuarioRegistro,
   } = req.body;
+  const idItemNumero = parseInt(idItem);
+  const numeroLoteNormalizado = limpiarTexto(numeroLote).toUpperCase();
   const stockInicial = parseInt(stockActual);
   const costoLote = costoCompraLote === undefined || costoCompraLote === null || costoCompraLote === ""
     ? null
     : parseFloat(costoCompraLote);
+  let fechasLote;
 
-  if (!idItem || !numeroLote || stockActual === undefined) {
+  if (!idItemNumero || !numeroLoteNormalizado || stockActual === undefined) {
     return res.status(400).json({
       error: "Producto, número de lote y stock actual son obligatorios",
     });
@@ -2107,6 +2448,16 @@ app.post("/api/lotes", async (req, res) => {
     return res.status(400).json({
       error: "El stock actual debe ser 0 o mayor",
     });
+  }
+
+  if (costoLote !== null && (Number.isNaN(costoLote) || costoLote < 0)) {
+    return res.status(400).json({ error: "El costo de compra no puede ser negativo" });
+  }
+
+  try {
+    fechasLote = validarFechasLote(fechaIngreso, fechaVencimiento);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
   }
 
   const connection = await pool.getConnection();
@@ -2124,10 +2475,10 @@ app.post("/api/lotes", async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        idItem,
-        numeroLote,
-        fechaVencimiento || null,
-        fechaIngreso || null,
+        idItemNumero,
+        numeroLoteNormalizado,
+        fechasLote.fechaVencimiento,
+        fechasLote.fechaIngreso,
         costoLote,
         stockInicial,
         usuarioRegistro || req.usuario.username,
@@ -2140,7 +2491,7 @@ app.post("/api/lotes", async (req, res) => {
         idUsuario: req.usuario.idUsuario,
         tipoMovimiento: "ENTRADA",
         tipoDocumento: "LOTE",
-        numeroDocumento: numeroLote,
+        numeroDocumento: numeroLoteNormalizado,
         tablaReferencia: "LT_Lote",
         idReferencia: result.insertId,
         cantidadEntrada: stockInicial,
@@ -2160,7 +2511,11 @@ app.post("/api/lotes", async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("Error al registrar lote:", error);
-    res.status(500).json({ error: "Error al registrar lote" });
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "Ya existe un lote con ese numero" });
+    }
+
+    res.status(error.statusCode || 500).json({ error: error.message || "Error al registrar lote" });
   } finally {
     connection.release();
   }
@@ -2213,12 +2568,15 @@ app.put("/api/lotes/:id", async (req, res) => {
     stockActual,
     usuarioRegistro,
   } = req.body;
+  const idItemNumero = parseInt(idItem);
+  const numeroLoteNormalizado = limpiarTexto(numeroLote).toUpperCase();
   const stockNuevo = parseInt(stockActual);
   const costoLote = costoCompraLote === undefined || costoCompraLote === null || costoCompraLote === ""
     ? null
     : parseFloat(costoCompraLote);
+  let fechasLote;
 
-  if (!idItem || !numeroLote || stockActual === undefined) {
+  if (!idItemNumero || !numeroLoteNormalizado || stockActual === undefined) {
     return res.status(400).json({
       error: "Producto, número de lote y stock actual son obligatorios",
     });
@@ -2230,6 +2588,16 @@ app.put("/api/lotes/:id", async (req, res) => {
     });
   }
 
+  if (costoLote !== null && (Number.isNaN(costoLote) || costoLote < 0)) {
+    return res.status(400).json({ error: "El costo de compra no puede ser negativo" });
+  }
+
+  try {
+    fechasLote = validarFechasLote(fechaIngreso, fechaVencimiento);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message });
+  }
+
   const connection = await pool.getConnection();
 
   try {
@@ -2237,7 +2605,7 @@ app.put("/api/lotes/:id", async (req, res) => {
 
     const [lotesActuales] = await connection.query(
       `
-      SELECT StockActual
+      SELECT IdItem, StockActual
       FROM LT_Lote
       WHERE IdLote = ?
       FOR UPDATE
@@ -2251,6 +2619,30 @@ app.put("/api/lotes/:id", async (req, res) => {
     }
 
     const stockAnterior = Number(lotesActuales[0].StockActual);
+    const idItemAnterior = Number(lotesActuales[0].IdItem);
+    const stockReservado = await obtenerStockReservadoPendiente(connection, id);
+
+    if (stockNuevo < stockReservado) {
+      await connection.rollback();
+      return res.status(409).json({ error: "El stock no puede quedar por debajo de pedidos pendientes" });
+    }
+
+    if (idItemAnterior !== idItemNumero) {
+      const [movimientos] = await connection.query(
+        `
+        SELECT IdMovimiento
+        FROM MI_MovimientoInventario
+        WHERE IdLote = ?
+        LIMIT 1
+        `,
+        [id]
+      );
+
+      if (movimientos.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({ error: "No se puede cambiar el producto de un lote con movimientos en Kardex" });
+      }
+    }
 
     const [result] = await connection.query(
       `
@@ -2266,10 +2658,10 @@ app.put("/api/lotes/:id", async (req, res) => {
       WHERE IdLote = ?
       `,
       [
-        idItem,
-        numeroLote,
-        fechaVencimiento || null,
-        fechaIngreso || null,
+        idItemNumero,
+        numeroLoteNormalizado,
+        fechasLote.fechaVencimiento,
+        fechasLote.fechaIngreso,
         costoLote,
         stockNuevo,
         usuarioRegistro || req.usuario.username,
@@ -2303,7 +2695,11 @@ app.put("/api/lotes/:id", async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("Error al actualizar lote:", error);
-    res.status(500).json({ error: "Error al actualizar lote" });
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "Ya existe un lote con ese numero" });
+    }
+
+    res.status(error.statusCode || 500).json({ error: error.message || "Error al actualizar lote" });
   } finally {
     connection.release();
   }
@@ -2524,7 +2920,7 @@ async function obtenerOCrearClienteVenta(connection, datosCliente = {}) {
 
   const numeroDocumento = String(datosCliente.numeroDocumento || datosCliente.dni || "").trim();
   const tipoDocumento = String(datosCliente.tipoDocumento || (numeroDocumento ? "DNI" : "")).trim() || null;
-  const nombre = String(datosCliente.nombre || datosCliente.nombreCliente || "").trim();
+  const nombre = limpiarTexto(datosCliente.nombre || datosCliente.nombreCliente);
 
   if (!numeroDocumento && !nombre) {
     return obtenerClienteGeneral(connection);
@@ -2719,7 +3115,7 @@ app.get("/api/ventas/:id", async (req, res) => {
 app.post("/api/ventas", async (req, res) => {
   const { cliente, tipoComprobante, serie, numeroComprobante, observacion, detalles } = req.body;
 
-  if (!detalles || detalles.length === 0) {
+  if (!Array.isArray(detalles) || detalles.length === 0) {
     return res.status(400).json({ error: "La venta debe tener al menos un producto" });
   }
 
@@ -2728,13 +3124,15 @@ app.post("/api/ventas", async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection, cliente);
+    const tipoComprobanteFinal = normalizarTipoComprobante(tipoComprobante);
+    const serieFinal = normalizarSerieComprobante(tipoComprobanteFinal, serie);
+    const numeroComprobanteManual = normalizarNumeroComprobanteManual(numeroComprobante);
+    const clienteNormalizado = normalizarClienteVentaPayload(cliente, tipoComprobanteFinal);
+    const { idCliente, idEstadoVenta } = await obtenerDatosVentaBasicos(connection, clienteNormalizado);
     const idUsuario = req.usuario.idUsuario;
     const numeroVenta = `V${Date.now().toString().slice(-9)}`;
-    const tipoComprobanteFinal = normalizarTipoComprobante(tipoComprobante);
-    const serieFinal = String(serie || obtenerSeriePorDefecto(tipoComprobanteFinal)).trim().toUpperCase();
-    const numeroComprobanteFinal = numeroComprobante
-      ? String(numeroComprobante).trim()
+    const numeroComprobanteFinal = numeroComprobanteManual
+      ? numeroComprobanteManual
       : await generarNumeroComprobanteVenta(connection, tipoComprobanteFinal, serieFinal);
     const documentoVenta = construirDocumentoVenta(tipoComprobanteFinal, serieFinal, numeroComprobanteFinal);
     const lotesBloqueados = new Map();
@@ -2821,7 +3219,7 @@ app.post("/api/ventas", async (req, res) => {
         throw new Error("Stock disponible insuficiente para uno de los productos");
       }
 
-      const subtotalDetalle = cantidadDetalle * precioUnitario - descuento;
+      const subtotalDetalle = redondearMoneda(cantidadDetalle * precioUnitario - descuento);
 
       if (subtotalDetalle < 0) {
         throw new Error("El descuento no puede superar el subtotal del producto");
@@ -2839,11 +3237,11 @@ app.post("/api/ventas", async (req, res) => {
         subtotalDetalle,
       });
 
-      total += subtotalDetalle;
+      total = redondearMoneda(total + subtotalDetalle);
     }
 
-    const subtotal = total / 1.18;
-    const igv = total - subtotal;
+    const subtotal = redondearMoneda(total / 1.18);
+    const igv = redondearMoneda(total - subtotal);
 
     const [ventaResult] = await connection.query(
       `
@@ -2919,7 +3317,7 @@ app.post("/api/ventas", async (req, res) => {
       return res.status(409).json({ error: "El numero de comprobante ya existe" });
     }
 
-    res.status(500).json({ error: error.message || "Error al registrar venta" });
+    res.status(error.statusCode || 400).json({ error: error.message || "Error al registrar venta" });
   } finally {
     connection.release();
   }
@@ -2928,6 +3326,11 @@ app.post("/api/ventas", async (req, res) => {
 app.post("/api/ventas/:id/pagar", async (req, res) => {
   const idVenta = parseInt(req.params.id);
   const { idTipoPago, codigoTipoPago, monto, referencia } = req.body;
+
+  if (!idVenta || Number.isNaN(idVenta)) {
+    return res.status(400).json({ error: "Pedido no valido" });
+  }
+
   const connection = await pool.getConnection();
 
   try {
@@ -2990,7 +3393,12 @@ app.post("/api/ventas/:id/pagar", async (req, res) => {
       ? montoTotal
       : Number(monto);
 
-    if (Number.isNaN(montoRecibido) || montoRecibido < montoTotal) {
+    if (montoTotal <= 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: "El total del pedido debe ser mayor a 0" });
+    }
+
+    if (Number.isNaN(montoRecibido) || montoRecibido <= 0 || montoRecibido < montoTotal) {
       await connection.rollback();
       return res.status(400).json({ error: "El monto recibido no puede ser menor al total del pedido" });
     }
@@ -3024,9 +3432,20 @@ app.post("/api/ventas/:id/pagar", async (req, res) => {
     }
 
     const idEstadoPagado = await obtenerEstadoVentaId(connection, "PAG");
-    const idPagoTipo = await obtenerTipoPagoId(connection, idTipoPago, codigoTipoPago);
+    const tipoPagoSeleccionado = await obtenerTipoPago(connection, idTipoPago, codigoTipoPago);
     const numeroPago = await generarNumeroPago(connection);
     const documentoVenta = construirDocumentoVenta(venta.TipoComprobante, venta.Serie, venta.NumeroComprobante);
+    const referenciaLimpia = limpiarTexto(referencia);
+
+    if (TIPOS_PAGO_CON_REFERENCIA.has(tipoPagoSeleccionado.Codigo) && !referenciaLimpia) {
+      await connection.rollback();
+      return res.status(400).json({ error: "La referencia es obligatoria para este metodo de pago" });
+    }
+
+    if (tipoPagoSeleccionado.Codigo !== "EFE" && Math.abs(montoRecibido - montoTotal) > 0.009) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Los pagos digitales o con tarjeta deben coincidir exactamente con el total" });
+    }
 
     const stockProcesadoPorLote = new Map();
 
@@ -3045,14 +3464,19 @@ app.post("/api/ventas/:id/pagar", async (req, res) => {
         throw new Error("Stock insuficiente para pagar el pedido");
       }
 
-      await connection.query(
+      const [stockResult] = await connection.query(
         `
         UPDATE LT_Lote
         SET StockActual = StockActual - ?
         WHERE IdLote = ?
+          AND StockActual >= ?
         `,
-        [cantidadSalida, detalle.IdLote]
+        [cantidadSalida, detalle.IdLote, cantidadSalida]
       );
+
+      if (stockResult.affectedRows === 0) {
+        throw crearErrorValidacion("Stock insuficiente para pagar el pedido");
+      }
 
       await registrarMovimientoInventario(connection, {
         idLote: detalle.IdLote,
@@ -3096,9 +3520,9 @@ app.post("/api/ventas/:id/pagar", async (req, res) => {
       `,
       [
         pagoResult.insertId,
-        idPagoTipo,
+        tipoPagoSeleccionado.IdTipoPago,
         montoTotal,
-        referencia || `Pago de ${documentoVenta}`,
+        referenciaLimpia || `Pago de ${documentoVenta}`,
       ]
     );
 
@@ -3114,7 +3538,7 @@ app.post("/api/ventas/:id/pagar", async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("Error al pagar pedido:", error.message);
-    res.status(500).json({ error: error.message || "Error al pagar pedido" });
+    res.status(error.statusCode || 400).json({ error: error.message || "Error al pagar pedido" });
   } finally {
     connection.release();
   }
@@ -3442,71 +3866,6 @@ app.get("/api/kardex", async (req, res) => {
   } catch (error) {
     console.error("Error al listar kardex:", error);
     res.status(500).json({ error: "Error al listar kardex" });
-  }
-});
-
-/* =========================
-   CHATBOT SIMPLE
-========================= */
-
-app.post("/api/chatbot", async (req, res) => {
-  const { mensaje } = req.body;
-
-  if (!mensaje) {
-    return res.status(400).json({ error: "El mensaje es obligatorio" });
-  }
-
-  const texto = mensaje.toLowerCase();
-
-  try {
-    let palabraClave = "";
-
-    if (texto.includes("dolor") && texto.includes("cabeza")) {
-      palabraClave = "paracetamol";
-    } else if (texto.includes("tos")) {
-      palabraClave = "jarabe";
-    } else if (texto.includes("gripe") || texto.includes("resfrio")) {
-      palabraClave = "gripe";
-    } else if (texto.includes("estomago") || texto.includes("diarrea")) {
-      palabraClave = "oral";
-    }
-
-    if (!palabraClave) {
-      return res.json({
-        respuesta:
-          "No encontré una recomendación clara. Sugiere consultar con un químico farmacéutico o médico.",
-        productos: [],
-      });
-    }
-
-    const [productos] = await pool.query(
-      `
-      SELECT
-        i.IdItem,
-        i.Nombre,
-        i.Descripcion,
-        i.PrecioVenta,
-        SUM(l.StockActual) AS StockDisponible
-      FROM IT_Item i
-      INNER JOIN LT_Lote l ON i.IdItem = l.IdItem
-      WHERE LOWER(i.Nombre) LIKE ?
-        AND i.Estado = 'A'
-        AND l.Estado = 'A'
-      GROUP BY i.IdItem, i.Nombre, i.Descripcion, i.PrecioVenta
-      HAVING StockDisponible > 0
-      LIMIT 5
-      `,
-      [`%${palabraClave}%`]
-    );
-
-    res.json({
-      respuesta:
-        "Estos productos podrían ayudar, pero no reemplazan la opinión de un profesional de salud.",
-      productos,
-    });
-  } catch (error) {
-    console.error("Error en chatbot:", error);
-    res.status(500).json({ error: "Error en el chatbot" });
   }
 });
 
